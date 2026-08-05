@@ -11,5 +11,12 @@
     "name": "RAGChat",
     "nameSlug": "ragchat",
     "classFile": "RagChatApp.ts",
-    "description": "A Bot using RAG System to answer the question from Documents which users upload"
+    "description": "A Bot using RAG System to answer the question from Documents which users upload",
+    "permissions": [
+        { "name": "user.read" },
+        { "name": "message.write" },
+        { "name": "networking" },
+        { "name": "persistence" },
+        { "name": "slashcommand" }
+    ]
 }
