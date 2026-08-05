@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ragchat-postgres
+    environment:
+      POSTGRES_USER: ragchat
+      POSTGRES_PASSWORD: ragchat
+      POSTGRES_DB: ragchat
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ragchat"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # backend:
+  #   build:
+  #     context: ../backend
+  #     dockerfile: Dockerfile
+  #   container_name: ragchat-backend
+  #   environment:
+  #     DATABASE_URL: postgresql://ragchat:ragchat@postgres:5432/ragchat
+  #     LLM_PROVIDER: openai
+  #     OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  #     ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  #     MODEL: gpt-4o
+  #     UPLOAD_DIR: /data/uploads
+  #   ports:
+  #     - "8000:8000"
+  #   volumes:
+  #     - uploads:/data/uploads
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+
+volumes:
+  pgdata:
+  # uploads:
