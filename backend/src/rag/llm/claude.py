@@ -10,8 +10,10 @@ from typing import Any
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage
 
+from src.rag.llm.base import LLMAdapter
 
-class ClaudeAdapter:
+
+class ClaudeAdapter(LLMAdapter):
     """Async adapter for Anthropic Claude models via LangChain.
 
     Wraps :class:`~langchain_anthropic.ChatAnthropic` so that the synchronous

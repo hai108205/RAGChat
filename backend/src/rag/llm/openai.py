@@ -10,8 +10,10 @@ from typing import Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
+from src.rag.llm.base import LLMAdapter
 
-class OpenAIAdapter:
+
+class OpenAIAdapter(LLMAdapter):
     """Async adapter for OpenAI chat-completion models via LangChain.
 
     Wraps :class:`~langchain_openai.ChatOpenAI` so that the synchronous

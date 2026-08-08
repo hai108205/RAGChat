@@ -211,3 +211,15 @@ class RAGPipeline:
             system_prompt="You are a professional translator. Only output the translation.",
             user_message=user_message,
         )
+
+    async def generate_reply(self, text: str, sender_name: str = "") -> str:
+        """Generate a suggested reply to a chat message."""
+        context = f"The message was sent by {sender_name}.\n\n" if sender_name else ""
+        user_message = (
+            f"{context}Write a short, helpful reply to the following message. "
+            f"Reply only with the reply text, no preamble.\n\nMessage:\n{text}"
+        )
+        return await self._llm.generate(
+            system_prompt="You are a helpful colleague drafting chat replies.",
+            user_message=user_message,
+        )

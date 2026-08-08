@@ -1,38 +1,11 @@
-"""LLM adapter factory and abstract interface.
+"""LLM adapter factory — re-exports the shared LLMAdapter base from base.py."""
 
-Provides a common interface for different LLM backends (OpenAI, Claude)
-and a factory function to instantiate the appropriate adapter at runtime.
-"""
-
-from abc import ABC, abstractmethod
-from typing import Any
+from src.rag.llm.base import LLMAdapter
 
 from .openai import OpenAIAdapter
 from .claude import ClaudeAdapter
 
-
-class LLMAdapter(ABC):
-    """Abstract base class for LLM adapters.
-
-    All concrete adapters must implement ``generate`` so that callers
-    can interact with any supported LLM through a uniform async API.
-    """
-
-    @abstractmethod
-    async def generate(
-        self, system_prompt: str, user_message: str, **kwargs: Any
-    ) -> str:
-        """Generate a response from the LLM.
-
-        Args:
-            system_prompt: The system-level instruction for the model.
-            user_message: The user's input message.
-            **kwargs: Additional provider-specific parameters.
-
-        Returns:
-            The generated text response as a string.
-        """
-        ...
+__all__ = ["LLMAdapter", "create_llm_adapter"]
 
 
 def create_llm_adapter(

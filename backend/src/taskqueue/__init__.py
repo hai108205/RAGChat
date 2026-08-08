@@ -15,11 +15,11 @@ from arq import ArqRedis, create_pool
 from arq.connections import RedisSettings
 
 from src.config import settings
-from src.rag.document.loader import DocumentLoader
-from src.rag.document.parser import DocumentParser
-from src.rag.document.cleaner import DocumentCleaner
-from src.rag.document.chunker import DocumentChunker
-from src.monitoring import documents_indexed_total, chunks_stored_total
+from src.helpers.log import get_logger
+from src.services.app_callback import notify_app
+from src.services.ingest_documents_service.ingest import ingest_document, remove_from_registry
+
+logger = get_logger(__name__)
 
 # Global ARQ Redis pool — initialized at startup
 _redis_pool: Optional[ArqRedis] = None
@@ -50,16 +50,20 @@ async def index_document_job(
     file_path_str: str,
     chunk_size: int = 1000,
     chunk_overlap: int = 200,
+    user_id: str = "",
+    room_id: str = "",
 ) -> dict:
     """Background job: parse, chunk, embed, and store a document.
 
     Args:
         ctx: ARQ worker context dict. Must contain 'embedder' and 'vector_store'.
-        doc_id: UUID string for the document.
+        doc_id: Deterministic UUID string for the document.
         filename: Original filename.
         file_path_str: Path to the uploaded file on disk.
         chunk_size: Text chunk size.
         chunk_overlap: Text chunk overlap.
+        user_id: Uploading Rocket.Chat user (for callback notification).
+        room_id: Uploading Rocket.Chat room (for callback notification).
 
     Returns:
         Dict with status, document_id, chunks_count.
@@ -68,56 +72,44 @@ async def index_document_job(
     vector_store = ctx["vector_store"]
 
     file_path = Path(file_path_str)
-    document_uuid = uuid.UUID(doc_id)
 
     try:
-        # Load → Parse → Clean → Chunk
-        loader = DocumentLoader()
-        parser = DocumentParser()
-        cleaner = DocumentCleaner()
-        chunker = DocumentChunker(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        content = file_path.read_bytes()
+        result = await ingest_document(
+            doc_id=uuid.UUID(doc_id),
+            filename=filename,
+            file_path=file_path,
+            content=content,
+            content_type="application/octet-stream",
+            embedder=embedder,
+            vector_store=vector_store,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
 
-        raw_text = loader.load(file_path)
-        parsed = parser.parse(file_path, raw_text)
-        cleaned = cleaner.clean(parsed.content)
-        chunks = chunker.split(cleaned)
-
-        if not chunks:
-            file_path.unlink(missing_ok=True)
-            return {"status": "error", "document_id": doc_id, "error": "Document produced no text content"}
-
-        # Prepare chunk dicts
-        chunk_dicts = []
-        for i, chunk_text in enumerate(chunks):
-            chunk_dicts.append({
-                "document_id": document_uuid,
-                "filename": filename,
-                "content": chunk_text,
-                "page": None,
-                "metadata": {
-                    "source": parsed.source,
-                    "file_format": parsed.metadata.get("file_format", ""),
-                    "chunk_index": i,
-                    "chunk_total": len(chunks),
-                },
-            })
-
-        # Embed all chunks
-        embeddings = await embedder.embed_documents([c["content"] for c in chunk_dicts])
-
-        # Store in vector database
-        await vector_store.add_chunks(chunk_dicts, embeddings)
-
-        documents_indexed_total.inc()
-        chunks_stored_total.inc(len(chunks))
+        await notify_app(
+            "indexing_complete",
+            user_id=user_id,
+            room_id=room_id,
+            document_name=filename,
+            chunks_count=result["chunks_count"],
+        )
 
         return {
-            "status": "indexed",
+            "status": result["status"],
             "document_id": doc_id,
             "filename": filename,
-            "chunks_count": len(chunks),
+            "chunks_count": result["chunks_count"],
         }
     except Exception as e:
+        logger.error("Indexing job failed", extra={"document_id": doc_id, "error": str(e)})
+        await notify_app(
+            "indexing_failed",
+            user_id=user_id,
+            room_id=room_id,
+            document_name=filename,
+            error=str(e),
+        )
         return {
             "status": "error",
             "document_id": doc_id,
@@ -136,6 +128,7 @@ async def delete_document_job(
 
     try:
         count = await vector_store.delete_document(document_uuid)
+        remove_from_registry(doc_id)
 
         # Also remove uploaded file
         upload_dir = Path(settings.upload_dir)
@@ -155,6 +148,8 @@ async def enqueue_index_document(
     doc_id: str,
     filename: str,
     file_path_str: str,
+    user_id: str = "",
+    room_id: str = "",
 ) -> str:
     """Enqueue a document indexing job. Returns the ARQ job ID."""
     pool = await get_redis_pool()
@@ -165,6 +160,8 @@ async def enqueue_index_document(
         file_path_str,
         settings.chunk_size,
         settings.chunk_overlap,
+        user_id,
+        room_id,
         _job_id=f"index:{doc_id}",
     )
     return job.job_id
@@ -198,12 +195,33 @@ async def get_job_status(job_id: str) -> dict:
 class WorkerSettings:
     """ARQ Worker configuration.
 
-    Used by: arq src.queue.jobs.WorkerSettings
+    Used by: arq src.taskqueue.WorkerSettings
     """
 
-    on_startup = None  # set dynamically in main.py
     functions = [index_document_job, delete_document_job]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = 10
     job_timeout = 600  # 10 minutes for large documents
     poll_delay = 0.5
+
+    @staticmethod
+    async def on_startup(ctx: dict) -> None:
+        """Build the embedder and vector store shared by all jobs."""
+        from src.rag.embedding.embedder import Embedder
+        from src.storage.vectorstore import VectorStore
+
+        embedder = Embedder(
+            api_key=settings.openai_api_key,
+            model=settings.embedding_model,
+        )
+        vector_store = VectorStore(settings.database_url)
+        await vector_store.initialize()
+
+        ctx["embedder"] = embedder
+        ctx["vector_store"] = vector_store
+
+    @staticmethod
+    async def on_shutdown(ctx: dict) -> None:
+        vector_store = ctx.get("vector_store")
+        if vector_store is not None:
+            await vector_store.close()
