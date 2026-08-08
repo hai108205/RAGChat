@@ -70,7 +70,6 @@ def setup_metrics(app: FastAPI) -> None:
     instrumentator = Instrumentator(
         should_group_status_codes=True,
         should_ignore_untemplated=True,
-        should_respect_env_var=True,
         should_instrument_requests_inprogress=True,
         excluded_handlers=["/metrics", "/health"],
         inprogress_name="ragchat_http_requests_inprogress",

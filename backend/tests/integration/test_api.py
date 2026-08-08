@@ -3,6 +3,21 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 from src.main import app
+from src.state import state
+from src.config import settings
+
+
+class FakeVectorStore:
+    """In-memory stand-in for VectorStore so document endpoints work without a DB."""
+
+    def __init__(self):
+        self.docs = []
+
+    async def list_documents(self):
+        return self.docs
+
+    async def delete_document(self, doc_uuid):
+        return 0
 
 
 @pytest.fixture
@@ -10,6 +25,15 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+@pytest.fixture
+def fake_vector_store():
+    """Swap state.vector_store with a fake for the duration of a test."""
+    original = state.vector_store
+    state.vector_store = FakeVectorStore()
+    yield state.vector_store
+    state.vector_store = original
 
 
 @pytest.mark.asyncio
@@ -44,14 +68,14 @@ async def test_chat_requires_query(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_chat_accepts_valid_request(client: AsyncClient):
-    """Chat endpoint accepts a valid request structure (may fail on LLM call in test)."""
+    """Chat endpoint returns 503 when the pipeline is not initialized (test env)."""
     response = await client.post("/api/chat", json={
         "query": "What is the leave policy?",
         "user_id": "user123",
         "room_id": "room456",
     })
-    # May be 500 (no LLM key) or 200 — either is fine in test env
-    assert response.status_code in (200, 500)
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Backend not initialized"
 
 
 # ── Search endpoint validation ────────────────────────────
@@ -73,7 +97,7 @@ async def test_search_validates_top_k_range(client: AsyncClient):
     assert response.status_code == 422
 
     response = await client.post("/api/search", json={"query": "test", "top_k": 5})
-    assert response.status_code in (200, 500)  # 500 if no DB
+    assert response.status_code == 503  # pipeline not initialized in test env
 
 
 # ── Summarize endpoint validation ─────────────────────────
@@ -87,11 +111,11 @@ async def test_summarize_requires_text(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_summarize_accepts_valid_request(client: AsyncClient):
-    """Summarize endpoint accepts valid text."""
+    """Summarize endpoint returns 503 when the pipeline is not initialized."""
     response = await client.post("/api/summarize", json={
         "text": "This is a long text that needs to be summarized."
     })
-    assert response.status_code in (200, 500)
+    assert response.status_code == 503
 
 
 # ── Explain endpoint validation ───────────────────────────
@@ -105,11 +129,11 @@ async def test_explain_requires_concept(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_explain_accepts_valid_request(client: AsyncClient):
-    """Explain endpoint accepts valid concept."""
+    """Explain endpoint returns 503 when the pipeline is not initialized."""
     response = await client.post("/api/explain", json={
         "concept": "quantum computing"
     })
-    assert response.status_code in (200, 500)
+    assert response.status_code == 503
 
 
 # ── Translate endpoint validation ─────────────────────────
@@ -123,17 +147,17 @@ async def test_translate_requires_text(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_translate_default_target_lang(client: AsyncClient):
-    """Translate endpoint defaults target_lang to vi."""
+    """Translate endpoint returns 503 when the pipeline is not initialized."""
     response = await client.post("/api/translate", json={
         "text": "Hello world"
     })
-    assert response.status_code in (200, 500)
+    assert response.status_code == 503
 
 
 # ── Documents endpoint validation ─────────────────────────
 
 @pytest.mark.asyncio
-async def test_list_documents(client: AsyncClient):
+async def test_list_documents(client: AsyncClient, fake_vector_store):
     """List documents returns a valid response."""
     response = await client.get("/api/documents")
     assert response.status_code == 200
@@ -143,7 +167,7 @@ async def test_list_documents(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_delete_nonexistent_document(client: AsyncClient):
+async def test_delete_nonexistent_document(client: AsyncClient, fake_vector_store):
     """Delete nonexistent document returns 404."""
     response = await client.delete("/api/documents/00000000-0000-0000-0000-000000000000")
     assert response.status_code == 404
@@ -168,20 +192,23 @@ async def test_upload_unsupported_format(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_upload_without_filename(client: AsyncClient):
-    """Upload without filename returns 400."""
+    """Upload without filename returns 422 (FastAPI rejects empty filename)."""
     response = await client.post("/api/documents", files={
         "file": ("", b"content", "text/plain")
     })
-    assert response.status_code == 400
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_upload_txt_document(client: AsyncClient):
-    """Upload a valid .txt document."""
+async def test_upload_txt_document(client: AsyncClient, fake_vector_store, tmp_path):
+    """Upload a valid .txt document (sync indexing with stubbed embedder/store)."""
+    settings.upload_dir = str(tmp_path / "uploads")
     response = await client.post("/api/documents", files={
         "file": ("test.txt", b"This is a test document content for indexing.", "text/plain")
     })
-    assert response.status_code in (200, 500)  # 200 if DB available, 500 if not
+    # Sync ingest needs a real embedder/vector store; without them the
+    # endpoint must fail cleanly with 500, not crash the server.
+    assert response.status_code in (200, 500)
     if response.status_code == 200:
         data = response.json()
         assert data["filename"] == "test.txt"
@@ -190,8 +217,9 @@ async def test_upload_txt_document(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_upload_multiple_formats(client: AsyncClient):
+async def test_upload_multiple_formats(client: AsyncClient, fake_vector_store, tmp_path):
     """Upload documents in various supported formats (validation only)."""
+    settings.upload_dir = str(tmp_path / "uploads")
     formats = [
         ("doc.pdf", b"%PDF-1.4 test", "application/pdf"),
         ("doc.docx", b"DOCX test", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
