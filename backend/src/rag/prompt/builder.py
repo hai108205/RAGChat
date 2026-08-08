@@ -1,6 +1,64 @@
-"""Prompt builder — constructs prompts with context, history, and query."""
+"""Prompt builder — constructs prompts with context, history, and query.
 
+Supports RAG, Q&A, summarize, explain, translate, and conversation-aware prompts.
+"""
 
+# ---------------------------------------------------------------------------
+# Prompt templates (adapted from rag-chat123)
+# ---------------------------------------------------------------------------
+
+SYSTEM_TEMPLATE = """You are a helpful, respectful and honest assistant."""
+
+QA_PROMPT_TEMPLATE = """Answer the question below:
+{question}"""
+
+# Context-aware Q&A
+CTX_PROMPT_TEMPLATE = """Context information is below.
+---------------------
+{context}
+---------------------
+Given the context information and not prior knowledge, answer the question below:
+{question}"""
+
+# Refine existing answer with new context
+REFINED_CTX_PROMPT_TEMPLATE = """The original query is as follows: {question}
+We have provided an existing answer: {existing_answer}
+We have the opportunity to refine the existing answer
+(only if needed) with some more context below.
+---------------------
+{context}
+---------------------
+Given the new context, refine the original answer to better answer the query.
+If the context isn't useful, return the original answer.
+Refined Answer:"""
+
+# Conversation-aware question refinement
+REFINED_QUESTION_CONVERSATION_AWARENESS_PROMPT_TEMPLATE = """Chat History:
+---------------------
+{chat_history}
+---------------------
+Follow Up Question: {question}
+Given the above conversation and a follow up question, rephrase the follow up question to be a standalone question.
+Standalone question:"""
+
+# Conversation-aware answer
+REFINED_ANSWER_CONVERSATION_AWARENESS_PROMPT_TEMPLATE = """
+You are engaging in a conversation with a human participant who is unaware that they might be
+interacting with a machine.
+Your goal is to respond in a way that convincingly simulates human-like intelligence and behavior.
+The conversation should be natural, coherent, and contextually relevant.
+Chat History:
+---------------------
+{chat_history}
+---------------------
+Follow Up Question: {question}
+
+Given the context provided in the Chat History and the follow up question, please answer the follow up question above.
+If the follow up question isn't correlated to the context provided in the Chat History, please just answer the follow up
+question, ignoring the context provided in the Chat History.
+Please also don't reformulate the follow up question, and write just a concise answer."""
+
+# RAG Chat system prompt
 RAG_SYSTEM_PROMPT = """You are RAGChat, an AI assistant that answers questions based on the provided documents.
 Follow these rules strictly:
 1. Answer ONLY based on the provided context documents.
@@ -15,7 +73,6 @@ RAG_USER_PROMPT = """{history}User question: {query}
 
 Please provide a clear, accurate answer based on the context above. Include citations for each claim."""
 
-
 SUMMARIZE_PROMPT = """You are a professional text summarizer. Summarize the following text in a clear, concise way.
 Preserve all key information, facts, and figures. Use bullet points where appropriate.
 
@@ -24,14 +81,12 @@ Text to summarize:
 
 Summary:"""
 
-
 EXPLAIN_PROMPT = """You are a knowledgeable teacher. Explain the following concept in simple, easy-to-understand terms.
 Use analogies and examples where helpful. Assume the reader has no prior knowledge.
 
 Concept to explain: {concept}
 
 Explanation:"""
-
 
 TRANSLATE_PROMPT = """Translate the following text to {target_lang}. Preserve the original meaning, tone, and formatting.
 Only output the translation, nothing else.
@@ -42,8 +97,24 @@ Text to translate:
 Translation:"""
 
 
+# ---------------------------------------------------------------------------
+# Prompt builder class
+# ---------------------------------------------------------------------------
+
 class PromptBuilder:
-    """Build prompts for different RAGChat use cases."""
+    """Build prompts for all RAGChat use cases.
+
+    Supports:
+    - RAG Q&A (with context + history injection)
+    - Context-aware synthesis (create-and-refine, tree summarization)
+    - Conversation-aware question refinement
+    - Direct Q&A with conversation awareness
+    - Summarize, explain, translate
+    """
+
+    # ------------------------------------------------------------------
+    # RAG / Context prompts
+    # ------------------------------------------------------------------
 
     @staticmethod
     def build_rag_prompt(
@@ -69,10 +140,7 @@ class PromptBuilder:
             page_info = f" (Page {page})" if page else ""
             context_parts.append(f"[Document {i}: {source}{page_info}]\n{doc['content']}")
 
-        context_text = "\n\n".join(context_parts)
-
-        if not context_text:
-            context_text = "No relevant documents found."
+        context_text = "\n\n".join(context_parts) if context_parts else "No relevant documents found."
 
         # Format history
         history_text = ""
@@ -87,6 +155,83 @@ class PromptBuilder:
         user_message = RAG_USER_PROMPT.format(history=history_text, query=query)
 
         return system_prompt, user_message
+
+    @staticmethod
+    def build_ctx_prompt(question: str, context: str = "") -> tuple[str, str]:
+        """Build a context-aware Q&A prompt (for synthesis strategies).
+
+        Returns:
+            Tuple of (system_prompt, user_message).
+        """
+        system_prompt = SYSTEM_TEMPLATE
+        user_message = CTX_PROMPT_TEMPLATE.format(context=context, question=question)
+        return system_prompt, user_message
+
+    @staticmethod
+    def build_refined_ctx_prompt(
+        question: str,
+        existing_answer: str,
+        context: str = "",
+    ) -> tuple[str, str]:
+        """Build a refined context prompt for sequential refinement.
+
+        Returns:
+            Tuple of (system_prompt, user_message).
+        """
+        system_prompt = SYSTEM_TEMPLATE
+        user_message = REFINED_CTX_PROMPT_TEMPLATE.format(
+            context=context,
+            existing_answer=existing_answer,
+            question=question,
+        )
+        return system_prompt, user_message
+
+    # ------------------------------------------------------------------
+    # Conversation-aware prompts
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def build_refined_question_prompt(question: str, chat_history: str) -> tuple[str, str]:
+        """Build a prompt to refine a follow-up question into a standalone question.
+
+        Returns:
+            Tuple of (system_prompt, user_message).
+        """
+        system_prompt = SYSTEM_TEMPLATE
+        user_message = REFINED_QUESTION_CONVERSATION_AWARENESS_PROMPT_TEMPLATE.format(
+            chat_history=chat_history,
+            question=question,
+        )
+        return system_prompt, user_message
+
+    @staticmethod
+    def build_conversation_answer_prompt(question: str, chat_history: str) -> tuple[str, str]:
+        """Build a prompt to answer a question with conversation history awareness.
+
+        Returns:
+            Tuple of (system_prompt, user_message).
+        """
+        system_prompt = SYSTEM_TEMPLATE
+        user_message = REFINED_ANSWER_CONVERSATION_AWARENESS_PROMPT_TEMPLATE.format(
+            chat_history=chat_history,
+            question=question,
+        )
+        return system_prompt, user_message
+
+    @staticmethod
+    def build_qa_prompt(question: str) -> tuple[str, str]:
+        """Build a simple Q&A prompt (no context, no history).
+
+        Returns:
+            Tuple of (system_prompt, user_message).
+        """
+        system_prompt = SYSTEM_TEMPLATE
+        user_message = QA_PROMPT_TEMPLATE.format(question=question)
+        return system_prompt, user_message
+
+    # ------------------------------------------------------------------
+    # Utility prompts
+    # ------------------------------------------------------------------
 
     @staticmethod
     def build_summarize_prompt(text: str) -> str:
