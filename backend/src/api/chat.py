@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from src.main import pipeline
+from src.main import pipeline, chat_history
 
 
 router = APIRouter(tags=["chat"])
@@ -57,6 +57,10 @@ class TranslationResponse(BaseModel):
     translation: str = ""
 
 
+class ClearHistoryResponse(BaseModel):
+    status: str = "ok"
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """Ask a RAG question. Retrieves relevant documents and generates an answer with citations."""
@@ -64,10 +68,18 @@ async def chat(request: ChatRequest):
         result = await pipeline.ask(
             query=request.query,
             history=request.history,
+            chat_history=chat_history,
         )
         return ChatResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/chat/history", response_model=ClearHistoryResponse)
+async def clear_history():
+    """Clear the server-side chat history."""
+    chat_history.clear()
+    return ClearHistoryResponse(status="ok")
 
 
 @router.post("/search", response_model=SearchResponse)
