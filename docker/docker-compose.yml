@@ -80,6 +80,8 @@ services:
       MINIO_SECRET_KEY: minioadmin
       USE_MINIO: ${USE_MINIO:-false}
       USE_ASYNC_INDEXING: ${USE_ASYNC_INDEXING:-false}
+      API_KEY: ${API_KEY:-}
+      APP_CALLBACK_URL: ${APP_CALLBACK_URL:-}
     ports:
       - "8000:8000"
     volumes:
@@ -101,7 +103,7 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     container_name: ragchat-worker
-    command: arq src.queue.WorkerSettings --max-jobs 10
+    command: arq src.taskqueue.WorkerSettings --max-jobs 10
     environment:
       DATABASE_URL: postgresql://ragchat:ragchat@postgres:5432/ragchat
       REDIS_URL: redis://redis:6379/0

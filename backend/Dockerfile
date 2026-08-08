@@ -22,4 +22,4 @@ EXPOSE 8000
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # Override CMD for ARQ worker:
-# docker run ... ragchat-backend arq src.queue.WorkerSettings
+# docker run ... ragchat-backend arq src.taskqueue.WorkerSettings

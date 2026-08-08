@@ -27,14 +27,14 @@ format: ## Format code
 tidy: ## Format + lint + fix
 	cd backend && ruff format src/ tests/ && ruff check --fix src/ tests/
 
-migrate: ## Run database migrations
-	cd backend && python -m alembic upgrade head
+migrate: ## Create registry tables (SQLModel create_all; no alembic yet)
+	cd backend && python -c "from sqlmodel import SQLModel, create_engine; from src.models import DocumentRecord; from src.config import settings; e = create_engine(settings.registry_url); SQLModel.metadata.create_all(e); print('registry tables ready')"
 
 start: ## Start the backend server
 	cd backend && uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 
 start-worker: ## Start the ARQ worker
-	cd backend && arq src.queue.WorkerSettings
+	cd backend && arq src.taskqueue.WorkerSettings
 
 docker-up: ## Start all services via Docker Compose
 	docker compose -f docker/docker-compose.yml up -d
