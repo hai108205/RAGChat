@@ -14,6 +14,15 @@ import { SearchCommand } from './src/commands/SearchCommand';
 import { SummarizeCommand } from './src/commands/SummarizeCommand';
 import { ExplainCommand } from './src/commands/ExplainCommand';
 import { TranslateCommand } from './src/commands/TranslateCommand';
+import { BotMessageHandler } from './src/handlers/BotMessageHandler';
+import {
+    AskAiActionHandler,
+    SummarizeActionHandler,
+    ExplainActionHandler,
+    TranslateActionHandler,
+    GenerateReplyActionHandler,
+} from './src/handlers/MessageActionHandler';
+import { CallbackEndpoint } from './src/api/CallbackEndpoint';
 
 export class RagChatApp extends App {
     constructor(info: IAppInfo, logger: ILogger, accessors: IAppAccessors) {
@@ -33,6 +42,16 @@ export class RagChatApp extends App {
             configuration.slashCommands.provideSlashCommand(new ExplainCommand()),
             configuration.slashCommands.provideSlashCommand(new TranslateCommand()),
         ]);
+
+        await configuration.messageActions.provideMessageAction(new AskAiActionHandler());
+        await configuration.messageActions.provideMessageAction(new SummarizeActionHandler());
+        await configuration.messageActions.provideMessageAction(new ExplainActionHandler());
+        await configuration.messageActions.provideMessageAction(new TranslateActionHandler());
+        await configuration.messageActions.provideMessageAction(new GenerateReplyActionHandler());
+
+        await configuration.messages.providePostMessageSentToBot(new BotMessageHandler());
+
+        await configuration.api.provideApi(new CallbackEndpoint());
 
         this.getLogger().info('RAGChat App configured successfully');
     }

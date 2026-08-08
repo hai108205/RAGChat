@@ -122,7 +122,7 @@ export class BackendClient {
         return typeof key === 'string' ? key : '';
     }
 
-    private async post(
+    public async post(
         path: string,
         data: unknown,
     ): Promise<IHttpResponse> {

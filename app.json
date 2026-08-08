@@ -14,6 +14,8 @@
     "description": "A Bot using RAG System to answer the question from Documents which users upload",
     "permissions": [
         { "name": "user.read" },
+        { "name": "user.write" },
+        { "name": "message.read" },
         { "name": "message.write" },
         { "name": "networking" },
         { "name": "persistence" },
