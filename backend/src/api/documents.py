@@ -13,6 +13,8 @@ from src.rag.document.loader import DocumentLoader
 from src.rag.document.parser import DocumentParser
 from src.rag.document.cleaner import DocumentCleaner
 from src.rag.document.chunker import DocumentChunker
+from src.monitoring import documents_indexed_total, chunks_stored_total, documents_count
+from src.storage.objectstore import get_object_store
 
 
 router = APIRouter(tags=["documents"])
@@ -42,7 +44,11 @@ class DeleteResponse(BaseModel):
 
 @router.post("/documents", response_model=DocumentUploadResponse)
 async def upload_document(file: UploadFile = File(...)):
-    """Upload and index a document for RAG Q&A."""
+    """Upload and index a document for RAG Q&A.
+
+    Supports both synchronous (default) and async (ARQ) indexing.
+    Set USE_ASYNC_INDEXING=true to enable background job processing.
+    """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
 
@@ -55,16 +61,44 @@ async def upload_document(file: UploadFile = File(...)):
         )
 
     try:
-        # Save uploaded file
-        upload_dir = Path(settings.upload_dir)
-        upload_dir.mkdir(parents=True, exist_ok=True)
-
         doc_id = uuid.uuid4()
-        file_path = upload_dir / f"{doc_id}_{file.filename}"
-        content = await file.read()
-        file_path.write_bytes(content)
 
-        # Process document
+        # Save uploaded file
+        content = await file.read()
+
+        if settings.use_minio:
+            object_store = get_object_store()
+            await object_store.ensure_bucket()
+            object_name = f"{doc_id}/{file.filename}"
+            await object_store.upload(object_name, content, file.content_type or "application/octet-stream")
+
+            # Still write to local tmp for processing
+            upload_dir = Path(settings.upload_dir)
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            file_path = upload_dir / f"{doc_id}_{file.filename}"
+            file_path.write_bytes(content)
+        else:
+            upload_dir = Path(settings.upload_dir)
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            file_path = upload_dir / f"{doc_id}_{file.filename}"
+            file_path.write_bytes(content)
+
+        if settings.use_async_indexing:
+            # Async: enqueue background job, return immediately
+            from src.queue import enqueue_index_document
+            job_id = await enqueue_index_document(
+                doc_id=str(doc_id),
+                filename=file.filename,
+                file_path_str=str(file_path),
+            )
+            return DocumentUploadResponse(
+                document_id=str(doc_id),
+                filename=file.filename,
+                chunks_count=0,
+                status=f"queued (job: {job_id})",
+            )
+
+        # Sync: process immediately (original behavior)
         loader = DocumentLoader()
         parser = DocumentParser()
         cleaner = DocumentCleaner()
@@ -73,18 +107,15 @@ async def upload_document(file: UploadFile = File(...)):
             chunk_overlap=settings.chunk_overlap,
         )
 
-        # Load → Parse → Clean → Chunk
         raw_text = loader.load(file_path)
         parsed = parser.parse(file_path, raw_text)
         cleaned = cleaner.clean(parsed.content)
         chunks = chunker.split(cleaned)
 
         if not chunks:
-            # Clean up empty file
             file_path.unlink(missing_ok=True)
             raise HTTPException(status_code=400, detail="Document produced no text content")
 
-        # Prepare chunks with metadata
         chunk_dicts = []
         for i, chunk_text in enumerate(chunks):
             chunk_dicts.append({
@@ -100,11 +131,11 @@ async def upload_document(file: UploadFile = File(...)):
                 },
             })
 
-        # Embed all chunks
         embeddings = await embedder.embed_documents([c["content"] for c in chunk_dicts])
-
-        # Store in vector database
         await vector_store.add_chunks(chunk_dicts, embeddings)
+
+        documents_indexed_total.inc()
+        chunks_stored_total.inc(len(chunks))
 
         return DocumentUploadResponse(
             document_id=str(doc_id),
@@ -124,9 +155,20 @@ async def list_documents():
     """List all indexed documents."""
     try:
         docs = await vector_store.list_documents()
+        documents_count.set(len(docs))
         return DocumentListResponse(
             documents=[DocumentInfo(**d) for d in docs]
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/documents/jobs/{job_id}")
+async def get_job_status_endpoint(job_id: str):
+    """Get the status of an async indexing job."""
+    try:
+        from src.queue import get_job_status
+        return await get_job_status(job_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -144,7 +186,12 @@ async def delete_document(document_id: str):
         if count == 0:
             raise HTTPException(status_code=404, detail="Document not found")
 
-        # Also remove the uploaded file if it exists
+        # Remove from MinIO if enabled
+        if settings.use_minio:
+            object_store = get_object_store()
+            await object_store.delete_prefix(str(doc_uuid))
+
+        # Also remove the uploaded file if it exists locally
         upload_dir = Path(settings.upload_dir)
         for f in upload_dir.glob(f"{document_id}_*"):
             f.unlink(missing_ok=True)
