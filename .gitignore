@@ -4,6 +4,16 @@ node_modules/
 # rc-apps package output
 dist/
 
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+backend/data/
+*.egg
+
 # JetBrains IDEs
 out/
 .idea/
