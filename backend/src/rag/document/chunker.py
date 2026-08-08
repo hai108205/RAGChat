@@ -1,17 +1,19 @@
-"""Document chunker — splits documents into overlapping chunks for embedding."""
+"""Document chunker — splits documents into overlapping chunks using markdown-aware recursive splitting."""
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from src.services.ingest_documents_service.document_loader.text_splitter import (
+    create_recursive_text_splitter,
+)
+from src.services.ingest_documents_service.document_loader.format import Format
 
 
 class DocumentChunker:
-    """Split documents into overlapping chunks using LangChain."""
+    """Split documents into overlapping chunks using a markdown-aware recursive splitter."""
 
     def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
-        self._splitter = RecursiveCharacterTextSplitter(
+        self._splitter = create_recursive_text_splitter(
+            format=Format.MARKDOWN.value,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
-            separators=["\n\n", "\n", ". ", " ", ""],
-            length_function=len,
         )
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
