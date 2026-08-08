@@ -111,6 +111,12 @@ Metadata
 * Created Date
 * Last Updated
 
+### Document Identity & Versioning
+
+* Deterministic document ID via SHA-256 hash of canonical source path (NFD-normalized, lowercase).
+* Version hash via SHA-256 of content — enables diff detection for incremental indexing.
+* Document Registry (SQLite) tracks: `document_id`, `source`, `filename`, `size`, `content_type`, `version_hash`, `chunk_ids` (JSON array).
+
 ---
 
 ## 2.3 Document Processing
@@ -120,24 +126,31 @@ Pipeline
 ```
 Upload
     ↓
-Parser
+Parser (text extraction + metadata)
     ↓
-Cleaning
+Cleaning (NFKC normalization, whitespace, control chars)
     ↓
-Chunking
+Chunking (markdown-aware recursive split)
     ↓
-Embedding
+Embedding (OpenAI / BGE / E5)
     ↓
-Vector Database
+Vector Database (pgVector)
 ```
 
 Functions
 
-* Text extraction
-* Metadata extraction
-* Chunk generation
-* Embedding generation
-* Incremental indexing
+* Text extraction (8 formats: PDF, DOCX, PPTX, TXT, MD, HTML, CSV, XLSX)
+* Metadata extraction (title, author, page count, word count, language)
+* Chunk generation with markdown-aware separators: `\n#{1,6}` → ` ```\n` → `---` → `\n\n` → `\n` → ` ` → char
+* Embedding generation (batch + async)
+* **Incremental indexing** — diff current docs against Document Registry to compute `(new, changed, deleted)` sets; only re-index changed/new docs
+
+### Chunking Strategy
+
+* Algorithm: RecursiveCharacterTextSplitter (adapted from LangChain)
+* Default: `chunk_size=1000`, `chunk_overlap=200`
+* Markdown-aware: headings first, then code fences, then horizontal rules, then paragraphs, then sentences
+* Per-format overrides: PDF splits on page boundaries first, then within pages
 
 ---
 
@@ -145,12 +158,20 @@ Functions
 
 Support
 
-* Semantic Search
-* Keyword Search
-* Hybrid Search
-* Metadata Filter
-* Top-K Retrieval
-* Re-ranking
+* **Semantic Search** — pgVector cosine similarity (IVF Flat index, `lists=100`)
+* **Keyword Search** — BM25 / PostgreSQL full-text search (`tsvector` + `tsquery`)
+* **Hybrid Search** — Combined semantic + keyword with Reciprocal Rank Fusion (RRF, `k=60`)
+* **Metadata Filter** — department, project, language, tags, owner
+* **Top-K Retrieval** — configurable K (default 5)
+* **Re-ranking** — Cross-encoder (e.g., `mixedbread-ai/mxbai-rerank-base`) on top-K candidates
+
+### Relevance Scoring
+
+* Convert raw distance to [0, 1] relevance score:
+  * Cosine: `1.0 - distance`
+  * L2/Euclidean: `1.0 - distance / sqrt(2)`
+  * Inner Product: `1.0 - distance` (positive), `-1.0 * distance` (negative)
+* Configurable relevance threshold filter (default 0.3)
 
 Search Filters
 
@@ -172,6 +193,32 @@ Features
 * Source citations
 * Suggested follow-up questions
 * Hallucination reduction
+
+### Synthesis Strategies
+
+**Strategy 1 — Create-and-Refine** (sequential):
+1. First chunk: generate initial answer with context prompt.
+2. Subsequent chunks: refine existing answer with new context.
+3. Only the last iteration streams; intermediate answers are generated non-streaming.
+
+**Strategy 2 — Tree Summarization** (concurrent, default):
+1. Generate prompts for all chunks concurrently (`asyncio.gather`).
+2. Get answers for all chunks concurrently.
+3. Recursively combine answers in batches of `num_children` (default 2).
+4. Hierarchical merging until one root answer remains.
+5. Only the final merge streams; intermediate merges are non-streaming.
+
+### Conversation-Aware Question Refinement
+
+* Before retrieval, rewrite the user's question to be standalone using conversation history.
+* Uses LLM with `REFINED_QUESTION_CONVERSATION_AWARENESS` prompt template.
+* Ensures retrieval quality when user asks follow-up questions with pronouns/ellipsis.
+
+### Chat History
+
+* Server-side ring buffer (`ChatHistory` list, max length configurable, default 2 turns).
+* Stores Q&A pairs; oldest evicted when buffer full.
+* Exposed via `DELETE /chat/history` endpoint.
 
 Example
 
@@ -216,7 +263,7 @@ Message Actions
 
 Features
 
-* Session Memory
+* Session Memory (server-side ring buffer + client-side `IPersistence`)
 * Session Timeout
 * Conversation History
 * Rename Conversation
@@ -254,28 +301,29 @@ Admin can
 
 ## Performance
 
-* Low response latency
-* Concurrent users
-* Background indexing
-* Efficient vector search
+* Low response latency (< 5s for answer generation start)
+* Concurrent users (target: 50 simultaneous)
+* Background indexing via ARQ + Redis
+* Efficient vector search (pgVector IVF Flat → HNSW in Phase 2)
+* Response caching (Redis LRU, TTL-based per query hash)
 
 ---
 
 ## Scalability
 
-* Stateless services
-* Horizontal scaling
-* Queue-based indexing
-* Distributed vector database
+* Stateless services (backend + worker scale independently)
+* Horizontal scaling (multiple backend replicas behind load balancer)
+* Queue-based indexing (ARQ workers, configurable concurrency)
+* Distributed vector database (pgVector with read replicas)
 
 ---
 
 ## Availability
 
-* Health Check
-* Retry mechanism
-* Graceful degradation
-* Automatic restart
+* Health Check (`/health` endpoint)
+* Retry mechanism (exponential backoff on LLM calls)
+* Graceful degradation (return partial results when some sources fail)
+* Automatic restart (Docker `restart: unless-stopped`)
 
 ---
 
@@ -286,6 +334,7 @@ Authentication
 * Rocket.Chat Authentication
 * OAuth
 * JWT
+* API Key (for backend ↔ App communication)
 
 Authorization
 
@@ -297,31 +346,58 @@ Security Controls
 
 * Prompt Injection Protection
 * Input Validation
-* Secret Management
-* Encryption
+* Secret Management (`.env` + Docker secrets)
+* Encryption (TLS for all service communication)
 
 ---
 
 ## Reliability
 
-* Automatic retry
-* Backup
-* Recovery
-* Error handling
+* Automatic retry (ARQ built-in, LLM call retry)
+* Backup (PostgreSQL pg_dump, MinIO mirror)
+* Recovery (ARQ job persistence in Redis)
+* Error handling (structured error responses, sentry/logging)
 
 ---
 
 ## Observability
 
-Logging
+### Logging
 
-Metrics
+* Structured logging (JSON format, `structlog` or Python `logging` with JSON formatter)
+* Log levels: DEBUG, INFO, WARNING, ERROR
+* Correlation IDs per request
 
-Tracing
+### Metrics
 
-Audit Log
+* Prometheus metrics exposed at `/metrics`:
+  * `ragchat_requests_total` (Counter, labels: endpoint, status)
+  * `ragchat_request_duration_seconds` (Histogram, labels: endpoint)
+  * `ragchat_documents_indexed_total` (Counter)
+  * `ragchat_chunks_stored_total` (Counter)
+  * `ragchat_llm_calls_total` (Counter, labels: provider, model)
+  * `ragchat_llm_call_duration_seconds` (Histogram, labels: provider, model)
+  * `ragchat_embedding_requests_total` (Counter, labels: model)
+  * `ragchat_vector_search_duration_seconds` (Histogram)
+  * `ragchat_active_sessions` (Gauge)
+  * `ragchat_documents_count` (Gauge)
+* `prometheus_fastapi_instrumentator` middleware
 
-Performance Dashboard
+### Tracing
+
+* OpenTelemetry (OTLP export to Jaeger/Tempo)
+* Span coverage: HTTP → RAG pipeline → LLM call → Vector search
+
+### Audit Log
+
+* Document operations (upload, delete, re-index)
+* User queries (anonymized)
+* Admin actions (model config changes, permission changes)
+
+### Performance Dashboard
+
+* Grafana with pre-built `ragchat-dashboard.json`
+* Panels: request rate, latency percentiles, LLM call volume, document count, indexing throughput, error rate
 
 ---
 
@@ -370,12 +446,14 @@ Therefore: App = adapter only. Backend = all RAG logic.
 │  /api/documents     POST — upload document           │
 │  /api/documents     GET  — list documents            │
 │  /api/documents/:id DELETE — remove document         │
+│  /api/admin/*       — config, stats, users           │
 │                                                      │
 │  ┌────────────────────────────────────────────────┐  │
 │  │              RAG Pipeline (LangChain)           │  │
 │  │                                                 │  │
 │  │  Document → Parser → Chunker → Embedder         │  │
-│  │  Query   → Embed  → Retriever → Prompt → LLM   │  │
+│  │  Query   → Refine → Embed → Retrieve → Prompt   │  │
+│  │           → Synthesize → LLM → Citations        │  │
 │  └────────────────────────────────────────────────┘  │
 │                                                      │
 │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │
@@ -392,17 +470,21 @@ Therefore: App = adapter only. Backend = all RAG logic.
 2. ISlashCommand.executor fires in Rocket.Chat
 3. App sends IHttp.post → Python /api/chat { query, user_id, room_id }
 4. Python backend:
-   a. Embed query (text-embedding-3-small)
-   b. Search pgVector (cosine similarity, top-K=5)
-   c. Build prompt (system + context + history + query)
-   d. Call LLM (OpenAI / Claude)
-   e. Format citations
-   f. Return { answer, sources }
+   a. Load chat history (server-side ring buffer)
+   b. Refine question (conversation-aware standalone reformulation via LLM)
+   c. Embed refined query (text-embedding-3-small)
+   d. Search pgVector (hybrid: semantic + keyword, RRF fusion, top-K=5)
+   e. Apply relevance threshold filter
+   f. Build prompts for each chunk (system + context + history + query)
+   g. Synthesize answer (Tree Summarization strategy — concurrent chunk processing)
+   h. Format citations (source + page/section)
+   i. Return { answer, sources, follow_up_questions }
+   j. Append Q&A pair to chat history ring buffer
 5. App receives response
 6. App sends answer via IModifyCreator with attachments (citations)
 ```
 
-## 4.4 Document Flow
+## 4.4 Document Flow (Incremental Indexing)
 
 ```
 1. User uploads document via slash command or DM
@@ -410,11 +492,23 @@ Therefore: App = adapter only. Backend = all RAG logic.
 3. Python backend:
    a. Store raw file in Object Storage (MinIO)
    b. Parse (pdf→text, docx→text, etc.)
-   c. Clean & normalize text
-   d. Chunk (recursive character split, overlap=200, size=1000)
-   e. Embed each chunk
-   f. Store vectors + metadata in pgVector
+   c. Extract metadata (title, author, pages, word count, language)
+   d. Clean & normalize text (NFKC, whitespace, control chars)
+   e. Generate document_id (SHA-256 of canonical source path)
+   f. Generate version_hash (SHA-256 of content)
+   g. Check Document Registry for existing version → skip if unchanged
+   h. Chunk (markdown-aware recursive split, size=1000, overlap=200)
+   i. Embed each chunk (batch, async)
+   j. Store vectors + metadata in pgVector
+   k. Register in Document Registry (document_id, version_hash, chunk_ids)
 4. Return indexing status to App → notify user
+
+Incremental Re-index (scheduled or triggered):
+   a. Scan docs directory, compute (document_id, version_hash) for each
+   b. Diff against Document Registry → (new, changed, deleted) sets
+   c. Remove deleted/changed docs from pgVector and Registry
+   d. Chunk, embed, upsert only new + changed docs
+   e. Report changes to admin
 ```
 
 ## 4.5 Main Components
@@ -428,14 +522,20 @@ Therefore: App = adapter only. Backend = all RAG logic.
 | Session Store | App (TS) | Conversation history per user/room — via `IPersistence` |
 | HTTP Client | App (TS) | `IHttp` — all calls to Python backend |
 | REST API | Backend (Python) | FastAPI endpoints for chat, documents, admin |
-| Document Processor | Backend (Python) | LangChain document loaders + text splitters |
-| Embedding Service | Backend (Python) | OpenAI / BGE / E5 embedding generation |
-| Retriever | Backend (Python) | pgVector semantic search + hybrid search |
-| Prompt Builder | Backend (Python) | LangChain prompt templates with context injection |
+| Chat History | Backend (Python) | Server-side ring buffer (fixed-size Q&A pairs) |
+| Question Refiner | Backend (Python) | Conversation-aware standalone question reformulation |
+| Document Processor | Backend (Python) | LangChain document loaders + markdown-aware text splitters |
+| Document Registry | Backend (Python) | SQLite/SQLModel — tracks doc_id, version_hash, chunk_ids for incremental indexing |
+| Embedding Service | Backend (Python) | OpenAI / BGE / E5 embedding generation (async, batch) |
+| Retriever | Backend (Python) | Semantic (pgVector cosine) + Keyword (BM25) + Hybrid (RRF) |
+| Re-ranker | Backend (Python) | Cross-encoder on top-K candidates |
+| Prompt Builder | Backend (Python) | LangChain prompt templates with context + history injection |
+| Synthesis Engine | Backend (Python) | Tree Summarization (default) + Create-and-Refine strategies |
 | LLM Adapter | Backend (Python) | Unified interface for OpenAI, Claude, Gemini, Ollama |
 | Vector Store | Backend (Python) | pgVector with IVF Flat / HNSW index |
 | Object Storage | Infra | MinIO — raw document files |
 | Job Queue | Infra | Redis + ARQ — async document indexing |
+| Response Cache | Infra | Redis LRU — TTL-based query response caching |
 | Monitoring | Infra | Prometheus + Grafana + OpenTelemetry |
 
 ## 4.6 Technology Stack
@@ -462,6 +562,9 @@ Therefore: App = adapter only. Backend = all RAG logic.
 | Document Parsing | PyPDF2, python-docx, python-pptx, markitdown |
 | Async Queue | Redis + ARQ (for background indexing jobs) |
 | Object Storage | MinIO (S3-compatible) |
+| Caching | Redis (LRU, TTL-based) |
+| Logging | structlog (JSON structured logs) |
+| Tracing | OpenTelemetry SDK (OTLP export) |
 
 ### Infrastructure
 
@@ -470,7 +573,8 @@ Therefore: App = adapter only. Backend = all RAG logic.
 | Database | PostgreSQL 16 + pgVector |
 | Cache / Queue | Redis 7 |
 | Deployment | Docker Compose (MVP), Kubernetes (Production) |
-| Monitoring | Prometheus + Grafana + OpenTelemetry
+| Monitoring | Prometheus + Grafana + OpenTelemetry |
+| CI/CD | GitHub Actions (pytest + coverage threshold, lint, pre-commit) |
 
 ---
 
@@ -506,52 +610,130 @@ ragchat/
 ├── backend/                      # Python RAG Service (FastAPI)
 │   ├── pyproject.toml
 │   ├── Dockerfile
+│   ├── Makefile                  # Standardized tasks (install, test, migrate, start, tidy)
+│   ├── .pre-commit-config.yaml   # Ruff format + lint
 │   ├── src/
-│   │   ├── main.py               # FastAPI app entry point
+│   │   ├── main.py               # FastAPI app entry point + lifespan
+│   │   ├── config.py             # Pydantic Settings (env vars)
+│   │   ├── state.py              # Global singleton state (db_engine, llm_client, vector_db, embedder, cache)
+│   │   ├── database.py           # SQLAlchemy engine init (PostgreSQL)
 │   │   ├── api/
-│   │   │   ├── chat.py           # POST /api/chat
-│   │   │   ├── documents.py      # CRUD /api/documents
-│   │   │   └── admin.py          # Admin endpoints
-│   │   ├── rag/                  # LangChain RAG pipeline
-│   │   │   ├── pipeline.py       # Orchestrator: embed → retrieve → generate
+│   │   │   ├── routes.py         # Router aggregator
+│   │   │   ├── deps.py           # FastAPI dependencies (typed, from state)
+│   │   │   ├── endpoints/
+│   │   │   │   ├── health.py     # GET /health
+│   │   │   │   ├── chat.py       # POST /api/chat (non-streaming)
+│   │   │   │   ├── chat_stream.py # WebSocket /api/chat/stream + DELETE /api/chat/history
+│   │   │   │   ├── documents.py  # CRUD /api/documents
+│   │   │   │   └── admin.py      # Admin endpoints (models, prompts, stats, users)
+│   │   │   └── services/
+│   │   │       └── chat_stream.py # stream_chat_response, stream_rag_response
+│   │   ├── rag/                  # RAG Pipeline
+│   │   │   ├── pipeline.py       # Orchestrator: refine → embed → retrieve → rerank → synthesize → generate
 │   │   │   ├── document/
-│   │   │   │   ├── loader.py     # PDF, DOCX, TXT, Markdown, PPTX, CSV, XLSX
+│   │   │   │   ├── loader.py     # PDF, DOCX, PPTX, TXT, MD, HTML, CSV, XLSX
 │   │   │   │   ├── parser.py     # Text extraction + metadata extraction
-│   │   │   │   ├── cleaner.py    # Text normalization, whitespace, unicode
-│   │   │   │   └── chunker.py    # Recursive character split (size=1000, overlap=200)
+│   │   │   │   ├── cleaner.py    # NFKC normalization, whitespace, control chars
+│   │   │   │   └── chunker.py    # Markdown-aware recursive split (size=1000, overlap=200)
 │   │   │   ├── embedding/
-│   │   │   │   └── embedder.py   # OpenAI / BGE / E5 embedding
+│   │   │   │   └── embedder.py   # OpenAI / BGE / E5 embedding (async, batch)
 │   │   │   ├── retriever/
 │   │   │   │   ├── semantic.py   # pgVector cosine similarity
-│   │   │   │   ├── keyword.py    # BM25 / full-text search
-│   │   │   │   ├── hybrid.py     # Combined + reciprocal rank fusion
+│   │   │   │   ├── keyword.py    # BM25 / PostgreSQL full-text search
+│   │   │   │   ├── hybrid.py     # Combined + Reciprocal Rank Fusion (RRF)
 │   │   │   │   └── reranker.py   # Cross-encoder re-ranking
+│   │   │   ├── synthesis/
+│   │   │   │   ├── base.py       # Abstract synthesis strategy
+│   │   │   │   ├── create_and_refine.py  # Sequential chunk refinement
+│   │   │   │   └── tree_summarization.py # Concurrent hierarchical merge
 │   │   │   ├── prompt/
-│   │   │   │   └── builder.py    # LangChain ChatPromptTemplate
+│   │   │   │   └── builder.py    # LangChain ChatPromptTemplate + conversation-aware templates
 │   │   │   └── llm/
-│   │   │       ├── adapter.py    # Unified interface
+│   │   │       ├── adapter.py    # Unified interface (ABC)
 │   │   │       ├── openai.py
 │   │   │       ├── claude.py
 │   │   │       ├── gemini.py
 │   │   │       └── ollama.py
+│   │   ├── services/
+│   │   │   ├── chat_service/
+│   │   │   │   ├── conversation_handler.py  # refine_question, answer, answer_with_context
+│   │   │   │   ├── chat_history.py          # Fixed-size ring buffer (Q&A pairs)
+│   │   │   │   └── ctx_strategy.py          # Synthesis strategy selection
+│   │   │   └── ingest_documents_service/
+│   │   │       ├── document.py              # Document dataclass
+│   │   │       ├── document_registry.py     # SQLModel-backed registry (CRUD + diff/stale detection)
+│   │   │       └── document_loader/
+│   │   │           ├── loader.py            # DirectoryLoader (unstructured)
+│   │   │           ├── text_splitter.py      # Markdown-aware RecursiveCharacterTextSplitter
+│   │   │           └── format.py            # Format enum + per-format separators
+│   │   ├── models/
+│   │   │   └── document_record.py  # DocumentRecord SQLModel (documents table)
+│   │   ├── schemas/
+│   │   │   ├── chat.py             # ChatRequest, ChatResponse
+│   │   │   ├── documents.py        # DocumentInfo, DocumentUploadResponse, DocumentListResponse
+│   │   │   ├── health.py           # HealthResponse
+│   │   │   └── model.py            # ModelSettings
 │   │   ├── storage/
-│   │   │   ├── vectorstore.py    # pgVector client
-│   │   │   └── objectstore.py    # MinIO client
+│   │   │   ├── vectorstore.py      # pgVector client (SQLAlchemy, async wrapper)
+│   │   │   └── objectstore.py      # MinIO S3 client (singleton)
 │   │   ├── queue/
-│   │   │   └── jobs.py           # ARQ background tasks (indexing)
-│   │   └── config.py             # Pydantic Settings (env vars)
-│   └── tests/
-│       ├── unit/
-│       ├── integration/
-│       └── performance/
+│   │   │   ├── __init__.py         # ARQ job queue: index_document_job, delete_document_job, WorkerSettings
+│   │   │   └── jobs.py             # ARQ background task definitions
+│   │   ├── monitoring/
+│   │   │   └── __init__.py         # Prometheus metrics + FastAPI instrumentator
+│   │   ├── cache/
+│   │   │   └── response_cache.py   # Redis LRU cache (TTL-based, query hash key)
+│   │   └── helpers/
+│   │       ├── log.py              # Structured JSON logger (structlog)
+│   │       ├── prettier.py         # Format retrieval sources for display
+│   │       └── id_generator.py     # SHA-256 deterministic ID generation
+│   ├── tests/
+│   │   ├── conftest.py             # Fixtures (llm, vector_db, db_engine, TestClient)
+│   │   ├── unit/
+│   │   │   ├── test_chunker.py
+│   │   │   ├── test_cleaner.py
+│   │   │   ├── test_parser.py
+│   │   │   ├── test_config.py
+│   │   │   ├── test_llm_adapter.py
+│   │   │   ├── test_prompt_builder.py
+│   │   │   ├── test_id_generator.py
+│   │   │   ├── test_chat_history.py
+│   │   │   ├── test_document_registry.py
+│   │   │   ├── test_synthesis_strategies.py
+│   │   │   └── test_conversation_handler.py
+│   │   ├── integration/
+│   │   │   ├── test_api.py         # All endpoint validation
+│   │   │   ├── test_document_pipeline.py  # Full document processing pipeline
+│   │   │   ├── test_chat_stream.py
+│   │   │   └── test_rag_pipeline.py
+│   │   └── performance/
+│   │       ├── test_concurrent.py
+│   │       └── test_large_document.py
+│   └── scripts/
+│       └── memory_builder.py       # CLI for incremental index rebuild
 │
 ├── docker/
-│   ├── docker-compose.yml
-│   ├── Dockerfile.app            # Rocket.Chat + App
-│   └── Dockerfile.backend        # Python backend
+│   ├── docker-compose.yml          # 7 services (postgres, redis, minio, backend, worker, prometheus, grafana)
+│   ├── Dockerfile.app              # Rocket.Chat + App
+│   ├── Dockerfile.backend          # Python backend (Python 3.12-slim, uvicorn)
+│   ├── prometheus/
+│   │   └── prometheus.yml          # Scrape config (backend:8000/metrics every 15s)
+│   └── grafana/
+│       ├── dashboards/
+│       │   └── ragchat-dashboard.json
+│       └── provisioning/
+│           ├── datasources/
+│           │   └── prometheus.yml
+│           └── dashboards/
+│               └── provider.yml
+├── .github/
+│   └── workflows/
+│       ├── ci.yaml                 # pytest + coverage threshold + lint
+│       └── pre-commit.yaml         # Pre-commit CI
 ├── docs/
-├── scripts/
 ├── .gitnexus/
+├── .pre-commit-config.yaml
+├── Makefile
 └── README.md
 ```
 
@@ -561,14 +743,21 @@ ragchat/
 
 ## Unit Testing
 
-* Parser
-* Chunking
-* Embedding
-* Retriever
-* Prompt Builder
-* LLM Adapter
+* Parser (text extraction, metadata)
+* Chunker (markdown-aware split, size/overlap boundaries)
+* Cleaner (unicode normalization, whitespace, control chars)
+* Embedder (batch, query, async)
+* Retriever (semantic, keyword, hybrid, RRF)
+* Prompt Builder (context injection, history injection, all templates)
+* LLM Adapter (all providers, error handling)
+* Synthesis Strategies (create-and-refine, tree summarization)
+* Chat History (ring buffer, eviction)
+* Document Registry (CRUD, diff detection)
+* ID Generator (deterministic, normalization)
+* Config (defaults, env override)
 * Rate Limiter
 * Session Manager
+* Response Cache (TTL, LRU eviction)
 
 ---
 
@@ -579,8 +768,11 @@ ragchat/
 * Backend ↔ pgVector (embedding storage & retrieval)
 * Backend ↔ LLM (prompt → response, all providers)
 * Backend ↔ Object Storage (document upload & fetch)
-* Upload Pipeline (upload → parse → chunk → embed → store)
-* Async Queue (document indexing job lifecycle)
+* Upload Pipeline (upload → parse → clean → chunk → embed → store → registry)
+* Incremental Indexing (new, changed, deleted documents)
+* Async Queue (ARQ job lifecycle, status polling)
+* Chat Streaming (WebSocket, RAG on/off toggle)
+* Conversation History (refinement, ring buffer eviction)
 
 ---
 
@@ -589,9 +781,11 @@ ragchat/
 * Upload document
 * Index document
 * Ask question
-* Receive answer
+* Receive answer with citations
+* Follow-up question (conversation awareness)
 * Citation verification
 * Permission validation
+* Document deletion (cleanup from pgVector + MinIO + Registry)
 
 ---
 
@@ -599,35 +793,49 @@ ragchat/
 
 Measure
 
-* Response Time
-* Throughput
-* Concurrent Users
-* Indexing Speed
-* Large Document Performance
+* Response Time (p50, p95, p99)
+* Time-to-First-Token (TTFT)
+* Throughput (requests/sec)
+* Concurrent Users (target: 50)
+* Indexing Speed (pages/sec, chunks/sec)
+* Large Document Performance (100+ pages)
+* Cache Hit Rate
 
 ---
 
 ## Security Testing
 
-* Authentication
-* Authorization
-* Prompt Injection
-* Secret Leakage
-* Access Control
-* Rate Limiting
+* Authentication (API key validation, JWT)
+* Authorization (RBAC, document-level)
+* Prompt Injection (known attack patterns)
+* Secret Leakage (env vars, logs)
+* Access Control (cross-user, cross-department)
+* Rate Limiting (burst, sustained)
 
 ---
 
 ## Accuracy Evaluation
 
-Metrics
+### Retrieval Metrics
 
-* Recall@K
+* Recall@K (K=3, 5, 10)
 * Precision@K
-* Context Relevance
-* Faithfulness
+* MRR (Mean Reciprocal Rank)
+* NDCG@K
+
+### Generation Metrics
+
+* Context Relevance (RAGAS)
+* Faithfulness (RAGAS — hallucination detection)
+* Answer Relevance (RAGAS)
 * Hallucination Rate
-* Citation Accuracy
+* Citation Accuracy (source match, page match)
+
+### Evaluation Dataset
+
+* Curated set of 50+ question-answer pairs from enterprise documents
+* Synthetic test cases for edge cases (empty docs, multi-language, long context)
+* Regular re-evaluation on model/provider changes
 
 ---
 
@@ -651,38 +859,58 @@ Acceptance Criteria
 
 # 7. Development Roadmap
 
-## Phase 1 – MVP
+## Phase 1 – MVP (Current)
 
-* Rocket.Chat integration
-* Document upload
-* RAG pipeline
-* Citation
-* Session memory
-* Basic monitoring
+* ✅ Rocket.Chat integration (5 slash commands, DM bot, 5 message actions)
+* ✅ Document upload (8 formats, sync + async)
+* ✅ RAG pipeline (parser → cleaner → chunker → embedder → pgVector)
+* ✅ Semantic search (pgVector cosine similarity)
+* ✅ AI answer generation (OpenAI + Claude)
+* ✅ Citation support
+* ✅ Session memory (client-side IPersistence)
+* ✅ Basic monitoring (Prometheus metrics + Grafana)
+* 🔲 Incremental indexing with Document Registry
+* 🔲 Markdown-aware chunking
+* 🔲 Server-side chat history ring buffer
+* 🔲 Conversation-aware question refinement
+* 🔲 Synthesis strategies (Tree Summarization + Create-and-Refine)
+* 🔲 Deterministic document IDs (SHA-256)
+* 🔲 Relevance score conversion (distance → [0,1])
+* 🔲 CI/CD pipeline (GitHub Actions)
+* 🔲 Pre-commit hooks (Ruff)
+* 🔲 Makefile
 
 ---
 
 ## Phase 2 – Production
 
-* Hybrid Search
-* Re-ranking
+* Hybrid Search (semantic + keyword + RRF)
+* Re-ranking (cross-encoder)
 * Metadata filtering
-* Admin Dashboard
-* User Feedback
-* Analytics
+* Admin Dashboard (model config, stats, user management)
+* User Feedback (thumbs up/down, rating)
+* Analytics (usage patterns, popular queries, cost tracking)
+* Response caching (Redis LRU)
+* Rate limiting
+* Backend session manager
+* Performance tests
+* RAGAS evaluation pipeline
+* Episodic memory (conversation-aware retrieval)
 
 ---
 
 ## Phase 3 – Enterprise
 
 * Multi-tenant
-* SSO
+* SSO (OAuth/OIDC)
 * Multiple Knowledge Bases
-* Cost Tracking
-* OCR
-* MCP Integration
-* Agentic RAG
-* GraphRAG
+* Cost Tracking (per-user, per-department)
+* OCR (scanned PDFs, images)
+* MCP Integration (Model Context Protocol)
+* Agentic RAG (tool use, multi-step reasoning)
+* GraphRAG (knowledge graph + entity extraction)
+* Kubernetes deployment
+* Read replicas for pgVector
 
 ---
 
@@ -690,12 +918,14 @@ Acceptance Criteria
 
 | Risk                    | Mitigation                                      |
 | ----------------------- | ----------------------------------------------- |
-| Hallucination           | Better retrieval, prompt engineering, citations |
-| Large document indexing | Background queue (ARQ + Redis), incremental indexing |
-| High LLM cost           | Cache, smaller models, token optimization       |
-| Unauthorized access     | RBAC and document-level permissions             |
-| Slow response           | Hybrid search, pgVector HNSW index, response caching |
+| Hallucination           | Better retrieval (hybrid + rerank), conservative prompt engineering, mandatory citations, RAGAS faithfulness evaluation |
+| Large document indexing | Background queue (ARQ + Redis), incremental indexing (diff-based), configurable chunk size |
+| High LLM cost           | Response caching (Redis LRU), smaller models for simple queries, token optimization, cost tracking dashboard |
+| Unauthorized access     | RBAC and document-level permissions, API key validation, JWT |
+| Slow response           | Hybrid search (RRF), pgVector HNSW index (Phase 2), response caching, concurrent synthesis (Tree Summarization) |
 | App handler timeout     | App delegates all LLM calls to Python backend, returns response async via IModifyUpdater |
+| Poor retrieval quality  | Conversation-aware question refinement, hybrid search, relevance threshold filtering, re-ranking |
+| Duplicate/redundant indexing | Document Registry with SHA-256 version hash, incremental indexing |
 
 ---
 
@@ -706,5 +936,7 @@ The project is considered successful when:
 * Users can query enterprise documents directly from Rocket.Chat.
 * Responses are accurate and include verifiable citations.
 * Document permissions are enforced correctly.
-* The system remains stable under expected load.
+* The system remains stable under expected load (50 concurrent users).
 * The architecture supports future expansion with new LLM providers, vector databases, and enterprise knowledge sources.
+* Retrieval quality meets target: Recall@5 ≥ 0.85, Faithfulness ≥ 0.90.
+* Time-to-first-token < 5 seconds for 95th percentile.
