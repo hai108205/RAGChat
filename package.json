@@ -7,7 +7,6 @@
     },
     "dependencies": {
         "@rocket.chat/icons": "^0.38.0",
-        "@rocket.chat/ui-kit": "^0.36.1",
-        "langchain": "^1.5.4"
+        "@rocket.chat/ui-kit": "^0.36.1"
     }
 }

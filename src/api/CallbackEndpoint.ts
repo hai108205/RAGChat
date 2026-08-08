@@ -34,7 +34,7 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
         http: IHttp,
         persis: IPersistence,
     ): Promise<IApiResponse> {
-        const logger = new Logger(read.getLogger(), 'CallbackEndpoint');
+        const logger = new Logger(this.app.getLogger(), 'CallbackEndpoint');
         const body = request.content as Record<string, unknown>;
 
         logger.info('Received callback', body);

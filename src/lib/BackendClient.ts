@@ -89,6 +89,21 @@ export class BackendClient {
         }
     }
 
+    public async listDocuments(): Promise<Array<{
+        id: string;
+        filename: string;
+        chunks_count: number;
+        created_at?: string;
+    }>> {
+        try {
+            const response = await this.get('/api/documents');
+            return response.data.documents || [];
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+            throw new Error(message);
+        }
+    }
+
     public async translate(
         text: string,
         targetLang: string = 'vi',
@@ -126,20 +141,9 @@ export class BackendClient {
         path: string,
         data: unknown,
     ): Promise<IHttpResponse> {
-        const baseUrl = await this.getBackendUrl();
-        const apiKey = await this.getApiKey();
-
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-        };
-
-        if (apiKey) {
-            headers['Authorization'] = `Bearer ${apiKey}`;
-        }
-
-        const response = await this.http.post(`${baseUrl}${path}`, {
+        const response = await this.http.post(`${await this.getBackendUrl()}${path}`, {
             data,
-            headers,
+            headers: await this.buildHeaders(),
             timeout: 60000,
         });
 
@@ -148,5 +152,31 @@ export class BackendClient {
         }
 
         return response;
+    }
+
+    public async get(path: string): Promise<IHttpResponse> {
+        const response = await this.http.get(`${await this.getBackendUrl()}${path}`, {
+            headers: await this.buildHeaders(),
+            timeout: 60000,
+        });
+
+        if (response.statusCode >= 400) {
+            throw new Error(ERRORS.BACKEND_ERROR(response.statusCode));
+        }
+
+        return response;
+    }
+
+    private async buildHeaders(): Promise<Record<string, string>> {
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+        };
+
+        const apiKey = await this.getApiKey();
+        if (apiKey) {
+            headers['Authorization'] = `Bearer ${apiKey}`;
+        }
+
+        return headers;
     }
 }

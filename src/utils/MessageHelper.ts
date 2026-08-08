@@ -7,6 +7,7 @@ export async function sendMessage(
     room: unknown,
     text: string,
     attachment?: IMessageAttachment,
+    threadId?: string,
 ): Promise<void> {
     const appUser = await read.getUserReader().getAppUser();
     if (!appUser) { return; }
@@ -16,6 +17,10 @@ export async function sendMessage(
         .setSender(appUser)
         .setText(text)
         .setGroupable(false);
+
+    if (threadId) {
+        builder.setThreadId(threadId);
+    }
 
     if (attachment) {
         builder.setAttachments([attachment]);

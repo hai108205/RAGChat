@@ -45,32 +45,47 @@ export class BotMessageHandler implements IPostMessageSentToBot {
         input: string,
         message: IMessage,
         read: IRead,
-        _http: IHttp,
+        http: IHttp,
         persistence: IPersistence,
         modify: IModify,
     ): Promise<void> {
         if (!input) {
-            await sendMessage(read, modify, message.room, Formatter.formatHelpMessage());
+            await sendMessage(read, modify, message.room, Formatter.formatHelpMessage(), undefined, message.threadId);
             return;
         }
 
         const [subCommand] = input.split(/\s+/);
 
         switch (subCommand.toLowerCase()) {
+            case BOT_SUB_COMMANDS.START: {
+                await sendMessage(
+                    read, modify, message.room,
+                    Formatter.formatWelcomeMessage(),
+                    undefined,
+                    message.threadId,
+                );
+                break;
+            }
+
+            case BOT_SUB_COMMANDS.STATS: {
+                await this.handleStats(message, read, http, modify);
+                break;
+            }
+
             case BOT_SUB_COMMANDS.CLEAR: {
                 const sessionStore = new SessionStore(read, persistence);
                 const hasHistory = await sessionStore.hasHistory(message.sender.id);
                 if (hasHistory) {
                     await sessionStore.clearHistory(message.sender.id);
-                    await sendMessage(read, modify, message.room, ERRORS.HISTORY_CLEARED);
+                    await sendMessage(read, modify, message.room, ERRORS.HISTORY_CLEARED, undefined, message.threadId);
                 } else {
-                    await sendMessage(read, modify, message.room, ERRORS.EMPTY_HISTORY);
+                    await sendMessage(read, modify, message.room, ERRORS.EMPTY_HISTORY, undefined, message.threadId);
                 }
                 break;
             }
 
             case BOT_SUB_COMMANDS.HELP: {
-                await sendMessage(read, modify, message.room, Formatter.formatHelpMessage());
+                await sendMessage(read, modify, message.room, Formatter.formatHelpMessage(), undefined, message.threadId);
                 break;
             }
 
@@ -78,8 +93,31 @@ export class BotMessageHandler implements IPostMessageSentToBot {
                 await sendMessage(
                     read, modify, message.room,
                     `Unknown command: \`${input}\`. Type \`${BOT_PREFIX} help\` for available commands.`,
+                    undefined,
+                    message.threadId,
                 );
             }
+        }
+    }
+
+    private async handleStats(
+        message: IMessage,
+        read: IRead,
+        http: IHttp,
+        modify: IModify,
+    ): Promise<void> {
+        try {
+            const client = new BackendClient(http, read);
+            const documents = await client.listDocuments();
+            await sendMessage(
+                read, modify, message.room,
+                Formatter.formatStats(documents),
+                undefined,
+                message.threadId,
+            );
+        } catch (error: unknown) {
+            const errMsg = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+            await sendMessage(read, modify, message.room, errMsg, undefined, message.threadId);
         }
     }
 
@@ -123,10 +161,10 @@ export class BotMessageHandler implements IPostMessageSentToBot {
                 ? Formatter.formatSources(response.sources)
                 : undefined;
 
-            await sendMessage(read, modify, message.room, response.answer, attachment);
+            await sendMessage(read, modify, message.room, response.answer, attachment, message.threadId);
         } catch (error: unknown) {
             const errMsg = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
-            await sendMessage(read, modify, message.room, errMsg);
+            await sendMessage(read, modify, message.room, errMsg, undefined, message.threadId);
         }
     }
 }

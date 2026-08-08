@@ -52,8 +52,49 @@ export class Formatter {
             '`/translate "text"` — Translate text to another language',
             '',
             '**DM Commands:**',
+            '`@ai start` — Start a session and see what I can do',
+            '`@ai stats` — Show knowledge base statistics',
             '`@ai help` — Show this help',
             '`@ai clear` — Clear your conversation history',
+            '',
+            '**Channels:** mention me (`@RAGChat your question`) to ask in a channel.',
+            '**Uploads:** drop a supported document (pdf, docx, txt, md, pptx, csv, xlsx, html) to index it.',
         ].join('\n');
+    }
+
+    public static formatWelcomeMessage(): string {
+        return [
+            '👋 **Welcome to RAGChat!**',
+            '',
+            'I answer questions using your team\'s documents. To get started:',
+            '',
+            '1. **Upload a document** — drop a pdf/docx/txt/md file into this chat and I will index it.',
+            '2. **Ask me anything** — just type your question here.',
+            '3. **Use `@ai stats`** to see what is in the knowledge base.',
+            '',
+            'Type `@ai help` for the full command list.',
+        ].join('\n');
+    }
+
+    public static formatStats(documents: Array<{
+        filename: string;
+        chunks_count: number;
+        created_at?: string;
+    }>): string {
+        if (documents.length === 0) {
+            return '📊 **Knowledge Base:** empty. Upload a document to get started.';
+        }
+
+        const totalChunks = documents.reduce((sum, d) => sum + (d.chunks_count || 0), 0);
+        const lines = documents.slice(0, 10).map(
+            (d) => `• \`${d.filename}\` — ${d.chunks_count} chunk(s)`,
+        );
+
+        return [
+            `📊 **Knowledge Base:** ${documents.length} document(s), ${totalChunks} chunk(s) total`,
+            '',
+            ...lines,
+            documents.length > 10 ? `_…and ${documents.length - 10} more_` : '',
+        ].filter(Boolean).join('\n');
     }
 }

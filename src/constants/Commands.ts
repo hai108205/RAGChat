@@ -9,6 +9,7 @@ export const COMMANDS = {
 export const BOT_SUB_COMMANDS = {
     CLEAR: 'clear',
     HELP: 'help',
+    START: 'start',
     STATS: 'stats',
 } as const;
 
