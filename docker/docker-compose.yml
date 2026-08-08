@@ -1,4 +1,7 @@
 services:
+  # ──────────────────────────────────────────────────
+  # PostgreSQL + pgVector
+  # ──────────────────────────────────────────────────
   postgres:
     image: pgvector/pgvector:pg16
     container_name: ragchat-postgres
@@ -15,27 +18,153 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
-  # backend:
-  #   build:
-  #     context: ../backend
-  #     dockerfile: Dockerfile
-  #   container_name: ragchat-backend
-  #   environment:
-  #     DATABASE_URL: postgresql://ragchat:ragchat@postgres:5432/ragchat
-  #     LLM_PROVIDER: openai
-  #     OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-  #     ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-  #     MODEL: gpt-4o
-  #     UPLOAD_DIR: /data/uploads
-  #   ports:
-  #     - "8000:8000"
-  #   volumes:
-  #     - uploads:/data/uploads
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
+  # ──────────────────────────────────────────────────
+  # Redis — cache + ARQ job queue
+  # ──────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: ragchat-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────
+  # MinIO — S3-compatible object storage for documents
+  # ──────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: ragchat-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────
+  # Python Backend — FastAPI + LangChain RAG service
+  # ──────────────────────────────────────────────────
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: ragchat-backend
+    environment:
+      DATABASE_URL: postgresql://ragchat:ragchat@postgres:5432/ragchat
+      REDIS_URL: redis://redis:6379/0
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      MODEL: ${MODEL:-gpt-4o}
+      UPLOAD_DIR: /data/uploads
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      USE_MINIO: ${USE_MINIO:-false}
+      USE_ASYNC_INDEXING: ${USE_ASYNC_INDEXING:-false}
+    ports:
+      - "8000:8000"
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────
+  # ARQ Worker — background document indexing
+  # ──────────────────────────────────────────────────
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: ragchat-worker
+    command: arq src.queue.WorkerSettings --max-jobs 10
+    environment:
+      DATABASE_URL: postgresql://ragchat:ragchat@postgres:5432/ragchat
+      REDIS_URL: redis://redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      UPLOAD_DIR: /data/uploads
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - async  # Only start with: docker compose --profile async up
+
+  # ──────────────────────────────────────────────────
+  # Prometheus — metrics collection
+  # ──────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ragchat-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheusdata:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────
+  # Grafana — metrics dashboards
+  # ──────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ragchat-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: ""
+    volumes:
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
 
 volumes:
   pgdata:
-  # uploads:
+  redisdata:
+  miniodata:
+  uploads:
+  prometheusdata:
+  grafana-data:
