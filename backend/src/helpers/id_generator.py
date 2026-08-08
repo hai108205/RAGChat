@@ -3,6 +3,7 @@
 import hashlib
 import re
 import unicodedata
+import uuid
 
 
 def normalize_text(text: str) -> str:
@@ -52,3 +53,35 @@ def generate_id(text: str) -> str:
     """
     normalized = normalize_text(text)
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def generate_document_id(source: str) -> uuid.UUID:
+    """
+    Derive a deterministic UUID for a document from its canonical source path.
+
+    The SHA-256 of the normalized source is truncated to 128 bits so the ID
+    fits the pgVector ``UUID`` column while staying deterministic.
+
+    Args:
+        source: Canonical source path or filename.
+
+    Returns:
+        Deterministic UUID for the document.
+    """
+    return uuid.UUID(generate_id(source)[:32])
+
+
+def generate_version_hash(content: bytes) -> str:
+    """
+    Compute the content version hash for diff detection.
+
+    Raw bytes are hashed (no normalization) so any content change —
+    including whitespace — produces a new version.
+
+    Args:
+        content: Raw document bytes.
+
+    Returns:
+        SHA-256 hex digest of the content.
+    """
+    return hashlib.sha256(content).hexdigest()

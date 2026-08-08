@@ -11,6 +11,8 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
+from src.rag.retriever.distance_metric import DistanceMetric, get_relevance_score_fn
+
 
 class Base(DeclarativeBase):
     pass
@@ -87,15 +89,25 @@ class VectorStore:
         return ids
 
     def _search_sync(
-        self, query_embedding: list[float], top_k: int = 5, filters: Optional[dict] = None
+        self,
+        query_embedding: list[float],
+        top_k: int = 5,
+        filters: Optional[dict] = None,
+        similarity_threshold: Optional[float] = None,
     ) -> list[dict]:
+        if similarity_threshold is None:
+            from src.config import settings
+            similarity_threshold = settings.similarity_threshold
+
+        # Cosine distance → [0, 1] relevance via the shared metric helpers
+        to_relevance = get_relevance_score_fn(DistanceMetric.COSINE)
+
         with self.session_factory() as session:
             result = session.execute(
                 text("""
                     SELECT id, document_id, filename, content, page, metadata,
-                           1 - (embedding <=> :embedding) AS relevance
+                           embedding <=> :embedding AS distance
                     FROM document_chunks
-                    WHERE 1 - (embedding <=> :embedding) > 0.5
                     ORDER BY embedding <=> :embedding
                     LIMIT :top_k
                 """),
@@ -110,9 +122,10 @@ class VectorStore:
                 "content": row[3],
                 "page": row[4],
                 "metadata": row[5],
-                "relevance": float(row[6]),
+                "relevance": to_relevance(float(row[6])),
             }
             for row in rows
+            if to_relevance(float(row[6])) >= similarity_threshold
         ]
 
     def _delete_document_sync(self, document_id: uuid.UUID) -> int:
@@ -160,9 +173,15 @@ class VectorStore:
         return await asyncio.to_thread(self._add_chunks_sync, chunks, embeddings)
 
     async def search(
-        self, query_embedding: list[float], top_k: int = 5, filters: Optional[dict] = None
+        self,
+        query_embedding: list[float],
+        top_k: int = 5,
+        filters: Optional[dict] = None,
+        similarity_threshold: Optional[float] = None,
     ) -> list[dict]:
-        return await asyncio.to_thread(self._search_sync, query_embedding, top_k, filters)
+        return await asyncio.to_thread(
+            self._search_sync, query_embedding, top_k, filters, similarity_threshold
+        )
 
     async def delete_document(self, document_id: uuid.UUID) -> int:
         return await asyncio.to_thread(self._delete_document_sync, document_id)

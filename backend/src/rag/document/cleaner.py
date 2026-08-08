@@ -33,8 +33,8 @@ class DocumentCleaner:
         # Replace Windows line endings
         text = text.replace("\r\n", "\n").replace("\r", "\n")
 
-        # Collapse multiple spaces (but not newlines)
-        text = re.sub(r"[ \t]+", " ", text)
+        # Collapse multiple spaces (but not newlines or tabs)
+        text = re.sub(r" +", " ", text)
 
         # Normalize blank lines — max 2 consecutive newlines
         text = re.sub(r"\n{3,}", "\n\n", text)

@@ -23,12 +23,13 @@ class DocumentLoader:
             FileNotFoundError: If the file does not exist.
         """
         file_path = Path(file_path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"File not found: {file_path}")
 
         ext = file_path.suffix.lower()
         if ext not in self.SUPPORTED_EXTENSIONS:
             raise ValueError(f"Unsupported file format: {ext}")
+
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
 
         if ext == ".pdf":
             return self._load_pdf(file_path)

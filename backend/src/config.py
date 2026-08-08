@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # Retrieval
     top_k: int = 5
-    similarity_threshold: float = 0.7
+    similarity_threshold: float = 0.3  # Plan 2.4: configurable relevance threshold
 
     # Document processing
     chunk_size: int = 1000
@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     debug: bool = False
+
+    # Auth — Bearer token required on /api/* when set; empty = open (dev mode)
+    api_key: str = ""
+
+    # Rocket.Chat app callback (webhook) for async job notifications
+    app_callback_url: str = ""
 
     # Redis / Queue
     redis_url: str = "redis://localhost:6379/0"
