@@ -6,8 +6,9 @@ import (main imports the routers, so routers cannot import main).
 
 from typing import Optional
 
+from langchain_core.language_models.chat_models import BaseChatModel
+
 from src.rag.embedding.embedder import Embedder
-from src.rag.llm.adapter import LLMAdapter
 from src.rag.pipeline import RAGPipeline
 from src.services.chat_service.chat_history import ChatHistory
 from src.storage.vectorstore import VectorStore
@@ -19,7 +20,7 @@ class AppState:
     def __init__(self) -> None:
         self.embedder: Optional[Embedder] = None
         self.vector_store: Optional[VectorStore] = None
-        self.llm: Optional[LLMAdapter] = None
+        self.llm: Optional[BaseChatModel] = None
         self.pipeline: Optional[RAGPipeline] = None
         self.chat_history: Optional[ChatHistory] = None
 

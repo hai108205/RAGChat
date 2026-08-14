@@ -1,7 +1,12 @@
-"""Prompt builder — constructs prompts with context, history, and query.
+"""Prompt builder — builds prompts for all RAGChat use cases using LangChain templates.
 
-Supports RAG, Q&A, summarize, explain, translate, and conversation-aware prompts.
+Replaces the hand-written ``.format()`` string templating with
+:class:`langchain_core.prompts.ChatPromptTemplate`, while keeping the existing
+``(system_prompt, user_message) -> tuple[str, str]`` interface so callers
+(synthesis strategies, conversation handler, pipeline) stay unchanged.
 """
+
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 
 # ---------------------------------------------------------------------------
 # Prompt templates (adapted from rag-chat123)
@@ -104,12 +109,10 @@ Translation:"""
 class PromptBuilder:
     """Build prompts for all RAGChat use cases.
 
-    Supports:
-    - RAG Q&A (with context + history injection)
-    - Context-aware synthesis (create-and-refine, tree summarization)
-    - Conversation-aware question refinement
-    - Direct Q&A with conversation awareness
-    - Summarize, explain, translate
+    Each builder method returns a ``(system_prompt, user_message)`` tuple built
+    from a LangChain ``ChatPromptTemplate``. Supports RAG Q&A, context-aware
+    synthesis, conversation-aware question refinement, direct Q&A, and the
+    summarize / explain / translate utilities.
     """
 
     # ------------------------------------------------------------------
@@ -132,7 +135,6 @@ class PromptBuilder:
         Returns:
             Tuple of (system_prompt, user_message).
         """
-        # Format context
         context_parts = []
         for i, doc in enumerate(context_docs, 1):
             source = doc.get("filename", "Unknown")
@@ -142,7 +144,6 @@ class PromptBuilder:
 
         context_text = "\n\n".join(context_parts) if context_parts else "No relevant documents found."
 
-        # Format history
         history_text = ""
         if history:
             history_lines = []
@@ -151,10 +152,12 @@ class PromptBuilder:
                 history_lines.append(f"{role_label}: {msg.get('content', '')}")
             history_text = "Conversation history:\n" + "\n".join(history_lines) + "\n\n"
 
-        system_prompt = RAG_SYSTEM_PROMPT.format(context=context_text)
-        user_message = RAG_USER_PROMPT.format(history=history_text, query=query)
-
-        return system_prompt, user_message
+        system = PromptTemplate.from_template(RAG_SYSTEM_PROMPT)
+        user = PromptTemplate.from_template(RAG_USER_PROMPT)
+        return (
+            system.format_prompt(context=context_text).to_string().strip(),
+            user.format_prompt(history=history_text, query=query).to_string().strip(),
+        )
 
     @staticmethod
     def build_ctx_prompt(question: str, context: str = "") -> tuple[str, str]:
@@ -163,9 +166,14 @@ class PromptBuilder:
         Returns:
             Tuple of (system_prompt, user_message).
         """
-        system_prompt = SYSTEM_TEMPLATE
-        user_message = CTX_PROMPT_TEMPLATE.format(context=context, question=question)
-        return system_prompt, user_message
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", SYSTEM_TEMPLATE),
+                ("user", CTX_PROMPT_TEMPLATE),
+            ]
+        )
+        messages = prompt.format_messages(context=context, question=question)
+        return messages[0].content, messages[1].content
 
     @staticmethod
     def build_refined_ctx_prompt(
@@ -178,13 +186,18 @@ class PromptBuilder:
         Returns:
             Tuple of (system_prompt, user_message).
         """
-        system_prompt = SYSTEM_TEMPLATE
-        user_message = REFINED_CTX_PROMPT_TEMPLATE.format(
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", SYSTEM_TEMPLATE),
+                ("user", REFINED_CTX_PROMPT_TEMPLATE),
+            ]
+        )
+        messages = prompt.format_messages(
             context=context,
             existing_answer=existing_answer,
             question=question,
         )
-        return system_prompt, user_message
+        return messages[0].content, messages[1].content
 
     # ------------------------------------------------------------------
     # Conversation-aware prompts
@@ -197,12 +210,14 @@ class PromptBuilder:
         Returns:
             Tuple of (system_prompt, user_message).
         """
-        system_prompt = SYSTEM_TEMPLATE
-        user_message = REFINED_QUESTION_CONVERSATION_AWARENESS_PROMPT_TEMPLATE.format(
-            chat_history=chat_history,
-            question=question,
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", SYSTEM_TEMPLATE),
+                ("user", REFINED_QUESTION_CONVERSATION_AWARENESS_PROMPT_TEMPLATE),
+            ]
         )
-        return system_prompt, user_message
+        messages = prompt.format_messages(chat_history=chat_history, question=question)
+        return messages[0].content, messages[1].content
 
     @staticmethod
     def build_conversation_answer_prompt(question: str, chat_history: str) -> tuple[str, str]:
@@ -211,12 +226,14 @@ class PromptBuilder:
         Returns:
             Tuple of (system_prompt, user_message).
         """
-        system_prompt = SYSTEM_TEMPLATE
-        user_message = REFINED_ANSWER_CONVERSATION_AWARENESS_PROMPT_TEMPLATE.format(
-            chat_history=chat_history,
-            question=question,
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", SYSTEM_TEMPLATE),
+                ("user", REFINED_ANSWER_CONVERSATION_AWARENESS_PROMPT_TEMPLATE),
+            ]
         )
-        return system_prompt, user_message
+        messages = prompt.format_messages(chat_history=chat_history, question=question)
+        return messages[0].content, messages[1].content
 
     @staticmethod
     def build_qa_prompt(question: str) -> tuple[str, str]:
@@ -225,9 +242,14 @@ class PromptBuilder:
         Returns:
             Tuple of (system_prompt, user_message).
         """
-        system_prompt = SYSTEM_TEMPLATE
-        user_message = QA_PROMPT_TEMPLATE.format(question=question)
-        return system_prompt, user_message
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", SYSTEM_TEMPLATE),
+                ("user", QA_PROMPT_TEMPLATE),
+            ]
+        )
+        messages = prompt.format_messages(question=question)
+        return messages[0].content, messages[1].content
 
     # ------------------------------------------------------------------
     # Utility prompts
@@ -235,11 +257,15 @@ class PromptBuilder:
 
     @staticmethod
     def build_summarize_prompt(text: str) -> str:
-        return SUMMARIZE_PROMPT.format(text=text)
+        return PromptTemplate.from_template(SUMMARIZE_PROMPT).format_prompt(
+            text=text
+        ).to_string().strip()
 
     @staticmethod
     def build_explain_prompt(concept: str) -> str:
-        return EXPLAIN_PROMPT.format(concept=concept)
+        return PromptTemplate.from_template(EXPLAIN_PROMPT).format_prompt(
+            concept=concept
+        ).to_string().strip()
 
     @staticmethod
     def build_translate_prompt(text: str, target_lang: str) -> str:
@@ -253,4 +279,6 @@ class PromptBuilder:
             "de": "German",
             "es": "Spanish",
         }.get(target_lang, target_lang)
-        return TRANSLATE_PROMPT.format(text=text, target_lang=lang_name)
+        return PromptTemplate.from_template(TRANSLATE_PROMPT).format_prompt(
+            text=text, target_lang=lang_name
+        ).to_string().strip()

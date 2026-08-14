@@ -3,10 +3,12 @@
 import re
 from typing import Any
 
+from langchain_core.documents import Document
+
 from src.helpers.log import get_logger
+from src.rag.llm.runtime import ainvoke
 from src.services.chat_service.chat_history import ChatHistory
 from src.services.chat_service.ctx_strategy import BaseSynthesisStrategy
-from src.services.ingest_documents_service.document import Document
 
 logger = get_logger(__name__)
 
@@ -40,7 +42,8 @@ async def refine_question(
 
         logger.info(f"--- Refine prompt: {user_message[:200]}... ---")
 
-        refined_question = await llm.generate(
+        refined_question = await ainvoke(
+            llm,
             system_prompt=system_prompt,
             user_message=user_message,
         )
@@ -81,14 +84,16 @@ async def answer(
 
         logger.debug(f"--- Prompt: {user_message[:200]}... ---")
 
-        return await llm.generate(
+        return await ainvoke(
+            llm,
             system_prompt=system_prompt,
             user_message=user_message,
         )
     else:
         system_prompt, user_message = prompt_builder.build_qa_prompt(question=question)
         logger.debug(f"--- Prompt: {user_message[:200]}... ---")
-        return await llm.generate(
+        return await ainvoke(
+            llm,
             system_prompt=system_prompt,
             user_message=user_message,
         )
