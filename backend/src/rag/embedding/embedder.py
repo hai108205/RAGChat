@@ -5,31 +5,46 @@ wrapping the LangChain OpenAIEmbeddings client with thread-pool offloading.
 """
 
 import asyncio
+from typing import Any
+
+from langchain_core.embeddings import Embeddings
 from langchain_openai import OpenAIEmbeddings
 
 
 class Embedder:
     """Async wrapper around LangChain's OpenAIEmbeddings for text embedding.
 
-    Offloads the synchronous LangChain embedding calls to a thread pool
-    so they don't block the event loop.
+    Holds the LangChain :class:`~langchain_core.embeddings.Embeddings` interface
+    (currently an ``OpenAIEmbeddings`` instance) and offloads the synchronous
+    embedding calls to a thread pool so they don't block the event loop.
 
     Attributes:
         dimension: The fixed output dimension (1536 for text-embedding-3-small).
     """
 
-    def __init__(self, api_key: str, model: str = "text-embedding-3-small") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "text-embedding-3-small",
+        base_url: str = "",
+    ) -> None:
         """Initialise the embedder with an OpenAI API key and model.
 
         Args:
             api_key: OpenAI API key.
             model: Embedding model identifier. Defaults to text-embedding-3-small.
+            base_url: Optional OpenAI-compatible base URL (local gateway/proxy).
+                Empty string uses the OpenAI default endpoint.
         """
-        self._embeddings = OpenAIEmbeddings(
-            openai_api_key=api_key,
-            model=model,
-            dimensions=1536,  # explicitly set for text-embedding-3-small
-        )
+        kwargs: dict[str, Any] = {
+            "openai_api_key": api_key,
+            "model": model,
+            "dimensions": 1536,
+        }
+        if base_url:
+            kwargs["base_url"] = base_url
+        self._embeddings: Embeddings = OpenAIEmbeddings(**kwargs)
+        self._model_name = model
 
     async def embed_query(self, text: str) -> list[float]:
         """Embed a single query text.
@@ -57,3 +72,13 @@ class Embedder:
     def dimension(self) -> int:
         """Return the fixed embedding dimension."""
         return 1536
+
+    @property
+    def model_name(self) -> str:
+        """Return the embedding model name."""
+        return self._model_name
+
+    @property
+    def embeddings(self) -> Embeddings:
+        """Return the underlying LangChain embeddings model."""
+        return self._embeddings

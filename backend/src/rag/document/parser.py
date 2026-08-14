@@ -1,8 +1,7 @@
 """Document parser — extracts structured content and metadata from loaded documents."""
 
-from pathlib import Path
-from typing import Optional
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass

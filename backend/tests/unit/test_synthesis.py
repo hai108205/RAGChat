@@ -1,15 +1,15 @@
 """Unit tests for synthesis strategies with a fake LLM."""
 
 import pytest
+from langchain_core.documents import Document
 
 from src.rag.prompt.builder import PromptBuilder
 from src.services.chat_service.ctx_strategy import (
     CreateAndRefineStrategy,
     TreeSummarizationStrategy,
-    get_ctx_synthesis_strategy,
     get_ctx_synthesis_strategies,
+    get_ctx_synthesis_strategy,
 )
-from src.services.ingest_documents_service.document import Document
 
 
 class FakeLLM:
@@ -18,9 +18,15 @@ class FakeLLM:
     def __init__(self):
         self.calls = []
 
-    async def generate(self, system_prompt, user_message, **kwargs):
-        self.calls.append((system_prompt, user_message))
-        return f"answer-{len(self.calls)}"
+    def invoke(self, messages, **kwargs):
+        system = messages[0].content
+        user = messages[1].content
+        self.calls.append((system, user))
+        return _ANSWER(len(self.calls))
+
+
+def _ANSWER(n):
+    return type("Resp", (), {"content": f"answer-{n}"})()
 
 
 def make_docs(n):
@@ -39,7 +45,7 @@ class TestCreateAndRefine:
     async def test_multiple_chunks_sequential_refinement(self):
         llm = FakeLLM()
         strategy = CreateAndRefineStrategy(llm, PromptBuilder())
-        answer, prompts = await strategy.generate_response(make_docs(3), "q?")
+        answer, _prompts = await strategy.generate_response(make_docs(3), "q?")
         assert answer == "answer-3"  # last refinement wins
         assert len(llm.calls) == 3
 
@@ -49,7 +55,9 @@ class TestTreeSummarization:
         llm = FakeLLM()
         strategy = TreeSummarizationStrategy(llm, PromptBuilder())
         answer, _ = await strategy.generate_response(make_docs(1), "q?")
-        assert answer == "answer-1"
+        # 1 leaf answer + 1 final combine
+        assert answer.startswith("answer-")
+        assert len(llm.calls) == 2
 
     async def test_multiple_chunks_combines(self):
         llm = FakeLLM()

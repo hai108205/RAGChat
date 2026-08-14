@@ -3,10 +3,11 @@
 import asyncio
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any
+
+from langchain_core.documents import Document
 
 from src.helpers.log import get_logger
-from src.services.ingest_documents_service.document import Document
+from src.rag.llm.runtime import ainvoke
 
 logger = get_logger(__name__)
 
@@ -63,7 +64,6 @@ class CreateAndRefineStrategy(BaseSynthesisStrategy):
     ) -> tuple[str, list[str]]:
         cur_response = None
         fmt_prompts = []
-        num_of_contents = len(retrieved_contents)
 
         for idx, node in enumerate(retrieved_contents, start=1):
             logger.info(f"--- Generating an answer for the chunk {idx} ... ---")
@@ -82,7 +82,8 @@ class CreateAndRefineStrategy(BaseSynthesisStrategy):
                 )
             fmt_prompts.append(f"{system_prompt}\n\n{user_message}")
 
-            cur_response = await self.llm.generate(
+            cur_response = await ainvoke(
+                self.llm,
                 system_prompt=system_prompt,
                 user_message=user_message,
             )
@@ -111,16 +112,14 @@ class TreeSummarizationStrategy(BaseSynthesisStrategy):
             system_prompt, user_message = self._prompt_builder.build_ctx_prompt(
                 question=question, context=content.page_content
             )
-            answer = await self.llm.generate(
+            answer = await ainvoke(
+                self.llm,
                 system_prompt=system_prompt,
                 user_message=user_message,
             )
             return idx, answer, f"{system_prompt}\n\n{user_message}"
 
-        tasks = [
-            process_chunk(idx, content)
-            for idx, content in enumerate(retrieved_contents, start=1)
-        ]
+        tasks = [process_chunk(idx, content) for idx, content in enumerate(retrieved_contents, start=1)]
         results = await asyncio.gather(*tasks)
 
         # Sort by index
@@ -156,7 +155,8 @@ class TreeSummarizationStrategy(BaseSynthesisStrategy):
             system_prompt, user_message = self._prompt_builder.build_ctx_prompt(
                 question=question, context=context
             )
-            answer = await self.llm.generate(
+            answer = await ainvoke(
+                self.llm,
                 system_prompt=system_prompt,
                 user_message=user_message,
             )

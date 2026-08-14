@@ -3,7 +3,6 @@
 import pytest
 from sqlmodel import Session, SQLModel, create_engine
 
-from src.models import DocumentRecord
 from src.services.ingest_documents_service.document_registry import DocumentRegistry
 
 
@@ -51,11 +50,13 @@ class TestDocumentRegistry:
         registry.upsert("change", version_hash="old")
         registry.upsert("gone", version_hash="v1")
 
-        new, changed, deleted = registry.get_stale_documents({
-            "keep": "v1",
-            "change": "new",
-            "added": "v1",
-        })
+        new, changed, deleted = registry.get_stale_documents(
+            {
+                "keep": "v1",
+                "change": "new",
+                "added": "v1",
+            }
+        )
         assert new == {"added"}
         assert changed == {"change"}
         assert deleted == {"gone"}

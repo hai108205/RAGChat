@@ -1,19 +1,22 @@
-"""Document chunker — splits documents into overlapping chunks using markdown-aware recursive splitting."""
+"""Document chunker — splits documents into overlapping chunks using a markdown-aware recursive splitter."""
 
-from src.services.ingest_documents_service.document_loader.text_splitter import (
-    create_recursive_text_splitter,
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from src.services.ingest_documents_service.document_loader.format import (
+    Format,
+    get_separators,
 )
-from src.services.ingest_documents_service.document_loader.format import Format
 
 
 class DocumentChunker:
     """Split documents into overlapping chunks using a markdown-aware recursive splitter."""
 
     def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
-        self._splitter = create_recursive_text_splitter(
-            format=Format.MARKDOWN.value,
+        self._splitter = RecursiveCharacterTextSplitter(
+            separators=get_separators(Format.MARKDOWN.value),
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
+            keep_separator=True,
         )
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
@@ -31,9 +34,7 @@ class DocumentChunker:
             return []
         return self._splitter.split_text(text)
 
-    def split_with_metadata(
-        self, text: str, base_metadata: dict, page: int | None = None
-    ) -> list[dict]:
+    def split_with_metadata(self, text: str, base_metadata: dict, page: int | None = None) -> list[dict]:
         """Split text and attach metadata to each chunk.
 
         Args:

@@ -1,17 +1,7 @@
-"""Retriever package — semantic, keyword, hybrid search with re-ranking."""
+"""Retriever package.
 
-from src.rag.retriever.distance_metric import (
-    DistanceMetric,
-    get_relevance_score_fn,
-    cosine_relevance_score_fn,
-    euclidean_relevance_score_fn,
-    max_inner_product_relevance_score_fn,
-)
-
-__all__ = [
-    "DistanceMetric",
-    "get_relevance_score_fn",
-    "cosine_relevance_score_fn",
-    "euclidean_relevance_score_fn",
-    "max_inner_product_relevance_score_fn",
-]
+Retrieval is delegated to LangChain's ``PGVector`` store (see
+``src.storage.vectorstore``), which wraps its own ``similarity_search`` /
+``similarity_search_with_score_by_vector`` helpers. This package no longer
+ships a hand-rolled distance-metric module.
+"""

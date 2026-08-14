@@ -1,6 +1,5 @@
 """Unit tests for DocumentChunker."""
 
-import pytest
 from src.rag.document.chunker import DocumentChunker
 
 

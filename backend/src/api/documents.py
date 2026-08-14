@@ -5,18 +5,20 @@ import binascii
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
-from typing import Optional
 
 from src.api.deps import require_api_key
 from src.config import settings
-from src.state import state
 from src.helpers.id_generator import generate_document_id
 from src.helpers.log import get_logger
-from src.rag.document.loader import DocumentLoader
 from src.monitoring import documents_count
-from src.services.ingest_documents_service.ingest import ingest_document, remove_from_registry
+from src.rag.document.loader import DocumentLoader
+from src.services.ingest_documents_service.ingest import (
+    ingest_document,
+    remove_from_registry,
+)
+from src.state import state
 from src.storage.objectstore import get_object_store
 
 logger = get_logger(__name__)
@@ -28,7 +30,7 @@ class DocumentInfo(BaseModel):
     id: str
     filename: str
     chunks_count: int
-    created_at: Optional[str] = None
+    created_at: str | None = None
 
 
 class DocumentListResponse(BaseModel):
@@ -50,16 +52,16 @@ class Base64UploadRequest(BaseModel):
     filename: str = Field(..., min_length=1)
     content_base64: str = Field(..., min_length=1)
     content_type: str = "application/octet-stream"
-    user_id: Optional[str] = None
-    room_id: Optional[str] = None
+    user_id: str | None = None
+    room_id: str | None = None
 
 
 async def _process_upload(
     filename: str,
     content: bytes,
     content_type: str,
-    user_id: Optional[str],
-    room_id: Optional[str],
+    user_id: str | None,
+    room_id: str | None,
 ) -> DocumentUploadResponse:
     """Shared ingest path for multipart and base64 uploads."""
     # Deterministic document ID from canonical filename (Plan 2.2)
@@ -79,6 +81,7 @@ async def _process_upload(
     if settings.use_async_indexing:
         # Async: enqueue background job, return immediately
         from src.taskqueue import enqueue_index_document
+
         job_id = await enqueue_index_document(
             doc_id=str(doc_id),
             filename=filename,
@@ -129,8 +132,8 @@ def _validate_extension(filename: str) -> None:
 @router.post("/documents", response_model=DocumentUploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
-    user_id: Optional[str] = Form(None),
-    room_id: Optional[str] = Form(None),
+    user_id: str | None = Form(None),
+    room_id: str | None = Form(None),
 ):
     """Upload and index a document for RAG Q&A.
 
@@ -157,7 +160,7 @@ async def upload_document(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Document processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Document processing failed: {e!s}")
 
 
 @router.post("/documents/base64", response_model=DocumentUploadResponse)
@@ -190,7 +193,7 @@ async def upload_document_base64(request: Base64UploadRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Document processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Document processing failed: {e!s}")
 
 
 @router.get("/documents", response_model=DocumentListResponse)
@@ -199,9 +202,7 @@ async def list_documents():
     try:
         docs = await state.vector_store.list_documents()
         documents_count.set(len(docs))
-        return DocumentListResponse(
-            documents=[DocumentInfo(**d) for d in docs]
-        )
+        return DocumentListResponse(documents=[DocumentInfo(**d) for d in docs])
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -211,6 +212,7 @@ async def get_job_status_endpoint(job_id: str):
     """Get the status of an async indexing job."""
     try:
         from src.taskqueue import get_job_status
+
         return await get_job_status(job_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

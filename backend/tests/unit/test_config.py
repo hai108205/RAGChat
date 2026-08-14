@@ -1,6 +1,5 @@
 """Unit tests for application config."""
 
-import pytest
 from src.config import Settings
 
 

@@ -1,7 +1,5 @@
 """Integration test for RAGPipeline with fake embedder/vector store/LLM."""
 
-import pytest
-
 from src.rag.pipeline import RAGPipeline
 from src.services.chat_service.chat_history import ChatHistory
 
@@ -31,9 +29,18 @@ class FakeLLM:
     def __init__(self):
         self.calls = []
 
-    async def generate(self, system_prompt, user_message, **kwargs):
-        self.calls.append(user_message)
-        return "fake answer"
+    def invoke(self, messages, **kwargs):
+        user_msg = messages[1].content
+        self.calls.append(user_msg)
+        return _Resp("fake answer")
+
+    def _model(self):
+        return self.model_name
+
+
+class _Resp:
+    def __init__(self, content):
+        self.content = content
 
 
 def make_pipeline(results, strategy="create-and-refine"):
@@ -47,12 +54,27 @@ def make_pipeline(results, strategy="create-and-refine"):
 
 
 RESULTS = [
-    {"content": "Leave policy: 20 days per year.", "filename": "hr.pdf",
-     "page": 1, "document_id": "d1", "relevance": 0.9},
-    {"content": "Leave policy: carry-over rules.", "filename": "hr.pdf",
-     "page": 2, "document_id": "d1", "relevance": 0.8},
-    {"content": "Unrelated cafeteria menu.", "filename": "menu.txt",
-     "page": None, "document_id": "d2", "relevance": 0.4},
+    {
+        "content": "Leave policy: 20 days per year.",
+        "filename": "hr.pdf",
+        "page": 1,
+        "document_id": "d1",
+        "relevance": 0.9,
+    },
+    {
+        "content": "Leave policy: carry-over rules.",
+        "filename": "hr.pdf",
+        "page": 2,
+        "document_id": "d1",
+        "relevance": 0.8,
+    },
+    {
+        "content": "Unrelated cafeteria menu.",
+        "filename": "menu.txt",
+        "page": None,
+        "document_id": "d2",
+        "relevance": 0.4,
+    },
 ]
 
 

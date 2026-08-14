@@ -2,20 +2,18 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from typing import Optional
 
 from src.api.deps import require_api_key
 from src.state import state
-
 
 router = APIRouter(tags=["chat"], dependencies=[Depends(require_api_key)])
 
 
 class ChatRequest(BaseModel):
     query: str = Field(..., min_length=1, description="User's question")
-    user_id: Optional[str] = Field(None, description="Rocket.Chat user ID")
-    room_id: Optional[str] = Field(None, description="Rocket.Chat room ID")
-    history: Optional[list[dict]] = Field(None, description="Conversation history")
+    user_id: str | None = Field(None, description="Rocket.Chat user ID")
+    room_id: str | None = Field(None, description="Rocket.Chat room ID")
+    history: list[dict] | None = Field(None, description="Conversation history")
 
 
 class ChatResponse(BaseModel):
@@ -48,7 +46,7 @@ class TranslateRequest(BaseModel):
 
 class GenerateReplyRequest(BaseModel):
     text: str = Field(..., min_length=1)
-    sender_name: Optional[str] = Field(None, description="Original message sender")
+    sender_name: str | None = Field(None, description="Original message sender")
 
 
 class TextResponse(BaseModel):

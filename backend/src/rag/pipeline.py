@@ -1,31 +1,31 @@
 """RAG Pipeline orchestrator — coordinates embedding, retrieval, synthesis, and generation."""
 
 import time
-from typing import Optional
 
-from src.config import settings
+from langchain_core.documents import Document
+from langchain_core.language_models.chat_models import BaseChatModel
+
+from src.monitoring import (
+    embedding_requests_total,
+    llm_call_duration_seconds,
+    llm_calls_total,
+    rag_request_duration_seconds,
+    rag_requests_total,
+    vector_search_duration_seconds,
+)
 from src.rag.embedding.embedder import Embedder
-from src.rag.llm.adapter import LLMAdapter
+from src.rag.llm.runtime import ainvoke
 from src.rag.prompt.builder import PromptBuilder
-from src.storage.vectorstore import VectorStore
 from src.services.chat_service.chat_history import ChatHistory
+from src.services.chat_service.conversation_handler import (
+    answer_with_context,
+    refine_question,
+)
 from src.services.chat_service.ctx_strategy import (
     BaseSynthesisStrategy,
     get_ctx_synthesis_strategy,
 )
-from src.services.chat_service.conversation_handler import (
-    refine_question,
-    answer_with_context,
-)
-from src.services.ingest_documents_service.document import Document
-from src.monitoring import (
-    rag_requests_total,
-    rag_request_duration_seconds,
-    llm_calls_total,
-    llm_call_duration_seconds,
-    embedding_requests_total,
-    vector_search_duration_seconds,
-)
+from src.storage.vectorstore import VectorStore
 
 
 class RAGPipeline:
@@ -35,13 +35,15 @@ class RAGPipeline:
         self,
         embedder: Embedder,
         vector_store: VectorStore,
-        llm: LLMAdapter,
+        llm: BaseChatModel,
         top_k: int = 5,
         synthesis_strategy: str = "tree-summarization",
+        provider: str = "unknown",
     ):
         self._embedder = embedder
         self._vector_store = vector_store
         self._llm = llm
+        self._provider = provider
         self._top_k = top_k
         self._synthesis_strategy_name = synthesis_strategy
         self._prompt_builder = PromptBuilder()
@@ -56,8 +58,8 @@ class RAGPipeline:
     async def ask(
         self,
         query: str,
-        history: Optional[list[dict]] = None,
-        chat_history: Optional[ChatHistory] = None,
+        history: list[dict] | None = None,
+        chat_history: ChatHistory | None = None,
     ) -> dict:
         """Answer a question using RAG with conversation-aware refinement.
 
@@ -83,9 +85,7 @@ class RAGPipeline:
 
             # 2. Embed refined query
             query_embedding = await self._embedder.embed_query(refined_query)
-            embedding_requests_total.labels(
-                model=getattr(self._embedder, "model_name", "unknown")
-            ).inc()
+            embedding_requests_total.labels(model=getattr(self._embedder, "model_name", "unknown")).inc()
 
             # 3. Retrieve relevant chunks
             t1 = time.monotonic()
@@ -112,7 +112,7 @@ class RAGPipeline:
 
             # 5. Synthesize answer using chosen strategy
             llm_start = time.monotonic()
-            answer, fmt_prompts = await answer_with_context(
+            answer, _fmt_prompts = await answer_with_context(
                 llm=self._llm,
                 ctx_synthesis_strategy=self._synthesis_strategy,
                 question=refined_query,
@@ -121,11 +121,11 @@ class RAGPipeline:
                 prompt_builder=self._prompt_builder,
             )
             llm_call_duration_seconds.labels(
-                provider=getattr(self._llm, "provider", "unknown"),
+                provider=self._provider,
                 model=getattr(self._llm, "model_name", "unknown"),
             ).observe(time.monotonic() - llm_start)
             llm_calls_total.labels(
-                provider=getattr(self._llm, "provider", "unknown"),
+                provider=self._provider,
                 model=getattr(self._llm, "model_name", "unknown"),
             ).inc()
 
@@ -136,12 +136,14 @@ class RAGPipeline:
                 filename = doc["filename"]
                 if filename not in seen:
                     seen.add(filename)
-                    sources.append({
-                        "title": filename,
-                        "snippet": doc["content"][:200].strip(),
-                        "page": doc.get("page"),
-                        "relevance": doc.get("relevance", 0.0),
-                    })
+                    sources.append(
+                        {
+                            "title": filename,
+                            "snippet": doc["content"][:200].strip(),
+                            "page": doc.get("page"),
+                            "relevance": doc.get("relevance", 0.0),
+                        }
+                    )
 
             # 7. Update chat history
             if chat_history is not None:
@@ -157,9 +159,7 @@ class RAGPipeline:
             rag_requests_total.labels(endpoint="chat", status="error").inc()
             raise
         finally:
-            rag_request_duration_seconds.labels(endpoint="chat").observe(
-                time.monotonic() - start
-            )
+            rag_request_duration_seconds.labels(endpoint="chat").observe(time.monotonic() - start)
 
     async def search(self, query: str, top_k: int = 5) -> list[dict]:
         """Search documents by semantic similarity.
@@ -191,7 +191,8 @@ class RAGPipeline:
     async def summarize(self, text: str) -> str:
         """Summarize text using the LLM."""
         user_message = self._prompt_builder.build_summarize_prompt(text)
-        return await self._llm.generate(
+        return await ainvoke(
+            self._llm,
             system_prompt="You are a professional text summarizer.",
             user_message=user_message,
         )
@@ -199,7 +200,8 @@ class RAGPipeline:
     async def explain(self, concept: str) -> str:
         """Explain a concept using the LLM."""
         user_message = self._prompt_builder.build_explain_prompt(concept)
-        return await self._llm.generate(
+        return await ainvoke(
+            self._llm,
             system_prompt="You are a knowledgeable and patient teacher.",
             user_message=user_message,
         )
@@ -207,7 +209,8 @@ class RAGPipeline:
     async def translate(self, text: str, target_lang: str = "vi") -> str:
         """Translate text using the LLM."""
         user_message = self._prompt_builder.build_translate_prompt(text, target_lang)
-        return await self._llm.generate(
+        return await ainvoke(
+            self._llm,
             system_prompt="You are a professional translator. Only output the translation.",
             user_message=user_message,
         )
@@ -219,7 +222,8 @@ class RAGPipeline:
             f"{context}Write a short, helpful reply to the following message. "
             f"Reply only with the reply text, no preamble.\n\nMessage:\n{text}"
         )
-        return await self._llm.generate(
+        return await ainvoke(
+            self._llm,
             system_prompt="You are a helpful colleague drafting chat replies.",
             user_message=user_message,
         )

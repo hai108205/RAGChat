@@ -1,169 +1,147 @@
-"""pgVector vector store client — synchronous SQLAlchemy + psycopg2, called via asyncio.to_thread."""
+"""pgVector vector store — backed by LangChain's PGVector.
+
+Wraps ``langchain_community.vectorstores.PGVector`` (which manages its own
+``langchain_pg_embedding`` table and collection) behind the synchronous async
+API the rest of the app uses. All synchronous calls are offloaded to a thread
+pool via :func:`asyncio.to_thread`.
+"""
 
 import asyncio
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
 
-from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, Column, DateTime, Index, Integer, String, Text, create_engine, text
-from sqlalchemy.dialects.postgresql import UUID
+from langchain_community.vectorstores import PGVector
+from langchain_core.embeddings import Embeddings
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from src.rag.retriever.distance_metric import DistanceMetric, get_relevance_score_fn
-
-
-class Base(DeclarativeBase):
-    pass
-
-
-class DocumentChunk(Base):
-    __tablename__ = "document_chunks"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
-    filename: Mapped[str] = mapped_column(String(512), nullable=False)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    page: Mapped[Optional[int]] = mapped_column(Integer, default=None)
-    metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
-    embedding = mapped_column(Vector(1536))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-
-    __table_args__ = (
-        Index(
-            "idx_chunks_embedding",
-            embedding,
-            postgresql_using="ivfflat",
-            postgresql_with={"lists": 100},
-            postgresql_ops={"embedding": "vector_cosine_ops"},
-        ),
-    )
+COLLECTION_NAME = "ragchat"
 
 
 class VectorStore:
-    """Synchronous pgVector store. All public methods are async wrappers over sync DB calls."""
+    """Async wrapper around LangChain's PGVector store.
 
-    def __init__(self, database_url: str) -> None:
+    Preserves the previous ``search``/``add_chunks``/``delete_document``/
+    ``list_documents`` interface so callers (pipeline, ingest) stay unchanged.
+    Chunks are stored with ``document_id``/``filename``/``page`` in their
+    metadata so retrieved results can be reconstructed the same way as before.
+    """
+
+    def __init__(self, database_url: str, embeddings: Embeddings) -> None:
         # psycopg2 expects postgresql:// or postgresql+psycopg2://
-        if database_url.startswith("postgresql://"):
-            sync_url = database_url
-        elif database_url.startswith("postgresql+asyncpg://"):
+        if database_url.startswith("postgresql+asyncpg://"):
             sync_url = database_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
-        elif database_url.startswith("postgresql+psycopg2://"):
-            sync_url = database_url
         else:
             sync_url = database_url
 
-        self.engine: Engine = create_engine(sync_url, pool_size=5, max_overflow=10)
-        self.session_factory = sessionmaker(self.engine, expire_on_commit=False)
+        self._url = sync_url
+        self._pgvector = PGVector(
+            connection_string=sync_url,
+            embedding_function=embeddings,
+            collection_name=COLLECTION_NAME,
+        )
+        # Separate engine for metadata queries PGVector does not expose.
+        self._engine: Engine = create_engine(sync_url, pool_size=5, max_overflow=10)
 
     # ------------------------------------------------------------------
     # Internal sync helpers
     # ------------------------------------------------------------------
 
     def _initialize_sync(self) -> None:
-        with self.engine.begin() as conn:
+        # Ensure the vector extension + backing table exist.
+        with self._engine.begin() as conn:
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            conn.execute(text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"'))
-        Base.metadata.create_all(self.engine)
+        self._pgvector.create_tables_if_not_exists()
 
     def _add_chunks_sync(self, chunks: list[dict], embeddings: list[list[float]]) -> list[str]:
-        ids: list[str] = []
-        with self.session_factory() as session:
-            for chunk, embedding in zip(chunks, embeddings):
-                doc = DocumentChunk(
-                    document_id=chunk["document_id"],
-                    filename=chunk["filename"],
-                    content=chunk["content"],
-                    page=chunk.get("page"),
-                    metadata_=chunk.get("metadata", {}),
-                    embedding=embedding,
-                )
-                session.add(doc)
-                session.flush()  # populate doc.id before commit
-                ids.append(str(doc.id))
-            session.commit()
-        return ids
+        texts = [c["content"] for c in chunks]
+        metadatas = []
+        for c in chunks:
+            metadata = {
+                "document_id": str(c["document_id"]),
+                "filename": c["filename"],
+                "page": c.get("page"),
+                **c.get("metadata", {}),
+            }
+            metadatas.append(metadata)
+        return self._pgvector.add_embeddings(
+            texts=texts,
+            embeddings=embeddings,
+            metadatas=metadatas,
+        )
 
     def _search_sync(
         self,
         query_embedding: list[float],
         top_k: int = 5,
-        filters: Optional[dict] = None,
-        similarity_threshold: Optional[float] = None,
+        filters: dict | None = None,
+        similarity_threshold: float | None = None,
     ) -> list[dict]:
         if similarity_threshold is None:
             from src.config import settings
+
             similarity_threshold = settings.similarity_threshold
 
-        # Cosine distance → [0, 1] relevance via the shared metric helpers
-        to_relevance = get_relevance_score_fn(DistanceMetric.COSINE)
-
-        with self.session_factory() as session:
-            result = session.execute(
-                text("""
-                    SELECT id, document_id, filename, content, page, metadata,
-                           embedding <=> :embedding AS distance
-                    FROM document_chunks
-                    ORDER BY embedding <=> :embedding
-                    LIMIT :top_k
-                """),
-                {"embedding": query_embedding, "top_k": top_k},
+        results = self._pgvector.similarity_search_with_score_by_vector(
+            embedding=query_embedding,
+            k=top_k,
+        )
+        out = []
+        for doc, score in results:
+            if score < similarity_threshold:
+                continue
+            metadata = doc.metadata
+            out.append(
+                {
+                    "id": metadata.get("id"),
+                    "document_id": metadata.get("document_id", ""),
+                    "filename": metadata.get("filename", "Unknown"),
+                    "content": doc.page_content,
+                    "page": metadata.get("page"),
+                    "metadata": metadata,
+                    "relevance": score,
+                }
             )
-            rows = result.fetchall()
-        return [
-            {
-                "id": str(row[0]),
-                "document_id": str(row[1]),
-                "filename": row[2],
-                "content": row[3],
-                "page": row[4],
-                "metadata": row[5],
-                "relevance": to_relevance(float(row[6])),
-            }
-            for row in rows
-            if to_relevance(float(row[6])) >= similarity_threshold
-        ]
+        return out
 
     def _delete_document_sync(self, document_id: uuid.UUID) -> int:
-        with self.session_factory() as session:
-            result = session.execute(
-                text("DELETE FROM document_chunks WHERE document_id = :doc_id"),
-                {"doc_id": document_id},
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                text("""
+                    DELETE FROM langchain_pg_embedding
+                    WHERE cmetadata->>'document_id' = :doc_id
+                """),
+                {"doc_id": str(document_id)},
             )
-            session.commit()
-            return result.rowcount
+        return result.rowcount
 
     def _list_documents_sync(self) -> list[dict]:
-        with self.session_factory() as session:
-            result = session.execute(
+        with self._engine.connect() as conn:
+            result = conn.execute(
                 text("""
-                    SELECT document_id, filename, COUNT(*) AS chunks_count,
-                           MIN(created_at) AS created_at
-                    FROM document_chunks
+                    SELECT cmetadata->>'document_id' AS document_id,
+                           cmetadata->>'filename' AS filename,
+                           COUNT(*) AS chunks_count
+                    FROM langchain_pg_embedding
                     GROUP BY document_id, filename
-                    ORDER BY created_at DESC
+                    ORDER BY filename ASC
                 """)
             )
             rows = result.fetchall()
         return [
             {
-                "id": str(row[0]),
+                "id": row[0],
                 "filename": row[1],
                 "chunks_count": row[2],
-                "created_at": row[3].isoformat() if row[3] else None,
+                "created_at": None,
             }
             for row in rows
         ]
 
     def _close_sync(self) -> None:
-        self.engine.dispose()
+        self._engine.dispose()
 
     # ------------------------------------------------------------------
-    # Public async API (run_blocking calls via asyncio.to_thread)
+    # Public async API (blocking calls via asyncio.to_thread)
     # ------------------------------------------------------------------
 
     async def initialize(self) -> None:
@@ -176,8 +154,8 @@ class VectorStore:
         self,
         query_embedding: list[float],
         top_k: int = 5,
-        filters: Optional[dict] = None,
-        similarity_threshold: Optional[float] = None,
+        filters: dict | None = None,
+        similarity_threshold: float | None = None,
     ) -> list[dict]:
         return await asyncio.to_thread(
             self._search_sync, query_embedding, top_k, filters, similarity_threshold

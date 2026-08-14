@@ -3,10 +3,10 @@
 import uuid
 
 from src.helpers.id_generator import (
-    normalize_text,
-    generate_id,
     generate_document_id,
+    generate_id,
     generate_version_hash,
+    normalize_text,
 )
 
 
@@ -33,7 +33,7 @@ class TestGenerateId:
 
     def test_known_vector(self):
         assert generate_id("Hello World") == (
-            "d2a84f4b8b650937ec8f73cd8be2c74add5a911ba64df27458ed8229da804a26"
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         )
 
 

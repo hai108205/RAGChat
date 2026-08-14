@@ -1,12 +1,16 @@
 """Application configuration loaded from environment variables."""
 
-from pathlib import Path
+from dotenv import find_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # Load the single repo-root `.env` (shared by local backend and Docker).
+    # find_dotenv() walks up from the CWD to the project root, so running from
+    # backend/ still resolves the root `.env`. In the Docker container the env
+    # is injected by compose, so no `.env` is found here and this is a no-op.
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=find_dotenv(usecwd=True) or None,
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -20,6 +24,8 @@ class Settings(BaseSettings):
     model: str = "gpt-4o"
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    openai_base_url: str = ""  # Optional OpenAI-compatible endpoint (local proxy/gateway)
+    anthropic_base_url: str = ""  # Optional Anthropic-compatible endpoint
     temperature: float = 0.7
     max_tokens: int = 2048
 

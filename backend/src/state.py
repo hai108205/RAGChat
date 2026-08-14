@@ -4,10 +4,9 @@ Endpoints import `state` from here instead of `src.main` to avoid a circular
 import (main imports the routers, so routers cannot import main).
 """
 
-from typing import Optional
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from src.rag.embedding.embedder import Embedder
-from src.rag.llm.adapter import LLMAdapter
 from src.rag.pipeline import RAGPipeline
 from src.services.chat_service.chat_history import ChatHistory
 from src.storage.vectorstore import VectorStore
@@ -17,11 +16,11 @@ class AppState:
     """Container for singletons created during the application lifespan."""
 
     def __init__(self) -> None:
-        self.embedder: Optional[Embedder] = None
-        self.vector_store: Optional[VectorStore] = None
-        self.llm: Optional[LLMAdapter] = None
-        self.pipeline: Optional[RAGPipeline] = None
-        self.chat_history: Optional[ChatHistory] = None
+        self.embedder: Embedder | None = None
+        self.vector_store: VectorStore | None = None
+        self.llm: BaseChatModel | None = None
+        self.pipeline: RAGPipeline | None = None
+        self.chat_history: ChatHistory | None = None
 
 
 state = AppState()
