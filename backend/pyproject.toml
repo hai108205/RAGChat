@@ -37,9 +37,28 @@ dev = [
     "ruff>=0.7.0",
 ]
 
+# ============================================================================
+# LƯU Ý: Đã chuyển build-backend từ `hatchling` sang `setuptools`.
+#
+# Trước đây dùng hatchling và CI liên tục fail với lỗi
+#   `ValueError: Unable to determine which files to ship inside the wheel`
+# Mặc dù config `packages = ["src"]` đúng và build thành công khi chạy tay,
+# hatchling vẫn fail trong build-isolation của pip trên GitHub Actions runner
+# (không tái hiện được ở môi trường local/container) → không đáng tin cậy.
+#
+# Chuyển sang setuptools (backend chuẩn, ổn định, reproducible trên mọi runner)
+# với `[tool.setuptools]` khai báo tường minh gói `src` để tránh mọi phỏng đoán.
+# Lưu ý: import trong code chạy dạng `src.main:app` (flat package `src`).
+# ============================================================================
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=65"]
+build-backend = "setuptools.build_meta"
+
+# Khai báo trực tiếp gói `src` — đặt dưới `[tool.setuptools]` (không phải
+# `[tool.hatch...]`) để setuptools biết chính xác ground mà không cần phỏng đoán.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
