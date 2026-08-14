@@ -1,3 +1,28 @@
+# ============================================================================
+# CI Backend
+# ----------------------------------------------------------------------------
+# Chạy kiểm tra chất lượng cho phần backend Python (RAG pipeline, API FastAPI).
+#
+# Khi nào workflow chạy? (Điều kiện trigger — `on`)
+#   - push  : mỗi lần commit vào nhánh `main`.
+#   - pull_request: mỗi PR nhắm tới `main`.
+#   - paths : CHỈ chạy khi có file trong `backend/**` bị thay đổi
+#             (backend mới thay đổi mới cần chạy CI, tiết kiệm tài nguyên).
+#
+# LƯU Ý LỖI TRƯỚC ĐÂY:
+#   Workflow từng khai báo đồng thời `paths` VÀ `paths-ignore` cho cùng sự
+#   kiện. GitHub Actions KHÔNG cho phép dùng cả hai cùng lúc trên một event
+#   (lỗi parse), khiến workflow bị coi là invalid và run fail ngay lập tức
+#   (0s, không có job nào chạy).
+#
+#   Giải pháp: BỎ `paths-ignore`. Chỉ giữ `paths`, vì `backend/**` vốn đã
+#   loại trừ các thay đổi nằm ngoài backend (như `.github/`, `src/`, ...).
+#   Nếu sau này muốn loại trừ thêm đường dẫn nào, dùng ký tự phủ định `!`
+#   trong chính `paths`, ví dụ:
+#     paths:
+#       - "backend/**"
+#       - "!backend/README.md"
+# ============================================================================
 name: CI Backend
 
 on:
@@ -5,14 +30,10 @@ on:
     branches: [main]
     paths:
       - "backend/**"
-    paths-ignore:
-      - ".github/**"
   pull_request:
     branches: [main]
     paths:
       - "backend/**"
-    paths-ignore:
-      - ".github/**"
 
 jobs:
   test:
