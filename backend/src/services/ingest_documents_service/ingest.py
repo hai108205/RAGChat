@@ -15,8 +15,8 @@ from src.rag.document.chunker import DocumentChunker
 from src.rag.document.cleaner import DocumentCleaner
 from src.rag.document.loader import DocumentLoader
 from src.rag.document.parser import DocumentParser
-from src.services.ingest_documents_service.registry_store import get_registry_session
 from src.services.ingest_documents_service.document_registry import DocumentRegistry
+from src.services.ingest_documents_service.registry_store import get_registry_session
 
 logger = get_logger(__name__)
 
@@ -50,7 +50,11 @@ async def ingest_document(
         existing = registry.get(document_id)
         if existing is not None and existing.version_hash == version_hash:
             logger.info("Document unchanged, skipping", extra={"document_id": document_id})
-            return {"status": "unchanged", "chunks_count": len(existing.chunk_ids), "version_hash": version_hash}
+            return {
+                "status": "unchanged",
+                "chunks_count": len(existing.chunk_ids),
+                "version_hash": version_hash,
+            }
 
     # Load → Parse → Clean → Chunk
     loader = DocumentLoader()
@@ -68,18 +72,20 @@ async def ingest_document(
 
     chunk_dicts = []
     for i, chunk_text in enumerate(chunks):
-        chunk_dicts.append({
-            "document_id": doc_id,
-            "filename": filename,
-            "content": chunk_text,
-            "page": None,
-            "metadata": {
-                "source": parsed.source,
-                "file_format": parsed.metadata.get("file_format", ""),
-                "chunk_index": i,
-                "chunk_total": len(chunks),
-            },
-        })
+        chunk_dicts.append(
+            {
+                "document_id": doc_id,
+                "filename": filename,
+                "content": chunk_text,
+                "page": None,
+                "metadata": {
+                    "source": parsed.source,
+                    "file_format": parsed.metadata.get("file_format", ""),
+                    "chunk_index": i,
+                    "chunk_total": len(chunks),
+                },
+            }
+        )
 
     # Re-index of a changed version: drop stale chunks first
     if existing is not None:

@@ -1,15 +1,15 @@
 """Unit tests for synthesis strategies with a fake LLM."""
 
 import pytest
+from langchain_core.documents import Document
 
 from src.rag.prompt.builder import PromptBuilder
 from src.services.chat_service.ctx_strategy import (
     CreateAndRefineStrategy,
     TreeSummarizationStrategy,
-    get_ctx_synthesis_strategy,
     get_ctx_synthesis_strategies,
+    get_ctx_synthesis_strategy,
 )
-from langchain_core.documents import Document
 
 
 class FakeLLM:
@@ -45,7 +45,7 @@ class TestCreateAndRefine:
     async def test_multiple_chunks_sequential_refinement(self):
         llm = FakeLLM()
         strategy = CreateAndRefineStrategy(llm, PromptBuilder())
-        answer, prompts = await strategy.generate_response(make_docs(3), "q?")
+        answer, _prompts = await strategy.generate_response(make_docs(3), "q?")
         assert answer == "answer-3"  # last refinement wins
         assert len(llm.calls) == 3
 

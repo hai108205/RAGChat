@@ -3,10 +3,10 @@
 import uuid
 
 from src.helpers.id_generator import (
-    normalize_text,
-    generate_id,
     generate_document_id,
+    generate_id,
     generate_version_hash,
+    normalize_text,
 )
 
 

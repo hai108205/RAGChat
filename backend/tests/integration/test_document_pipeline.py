@@ -2,11 +2,13 @@
 
 import tempfile
 from pathlib import Path
+
 import pytest
+
+from src.rag.document.chunker import DocumentChunker
+from src.rag.document.cleaner import DocumentCleaner
 from src.rag.document.loader import DocumentLoader
 from src.rag.document.parser import DocumentParser
-from src.rag.document.cleaner import DocumentCleaner
-from src.rag.document.chunker import DocumentChunker
 
 
 class TestDocumentPipeline:

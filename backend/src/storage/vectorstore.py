@@ -8,7 +8,6 @@ pool via :func:`asyncio.to_thread`.
 
 import asyncio
 import uuid
-from typing import Optional
 
 from langchain_community.vectorstores import PGVector
 from langchain_core.embeddings import Embeddings
@@ -30,9 +29,7 @@ class VectorStore:
     def __init__(self, database_url: str, embeddings: Embeddings) -> None:
         # psycopg2 expects postgresql:// or postgresql+psycopg2://
         if database_url.startswith("postgresql+asyncpg://"):
-            sync_url = database_url.replace(
-                "postgresql+asyncpg://", "postgresql+psycopg2://", 1
-            )
+            sync_url = database_url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
         else:
             sync_url = database_url
 
@@ -76,11 +73,12 @@ class VectorStore:
         self,
         query_embedding: list[float],
         top_k: int = 5,
-        filters: Optional[dict] = None,
-        similarity_threshold: Optional[float] = None,
+        filters: dict | None = None,
+        similarity_threshold: float | None = None,
     ) -> list[dict]:
         if similarity_threshold is None:
             from src.config import settings
+
             similarity_threshold = settings.similarity_threshold
 
         results = self._pgvector.similarity_search_with_score_by_vector(
@@ -92,15 +90,17 @@ class VectorStore:
             if score < similarity_threshold:
                 continue
             metadata = doc.metadata
-            out.append({
-                "id": metadata.get("id"),
-                "document_id": metadata.get("document_id", ""),
-                "filename": metadata.get("filename", "Unknown"),
-                "content": doc.page_content,
-                "page": metadata.get("page"),
-                "metadata": metadata,
-                "relevance": score,
-            })
+            out.append(
+                {
+                    "id": metadata.get("id"),
+                    "document_id": metadata.get("document_id", ""),
+                    "filename": metadata.get("filename", "Unknown"),
+                    "content": doc.page_content,
+                    "page": metadata.get("page"),
+                    "metadata": metadata,
+                    "relevance": score,
+                }
+            )
         return out
 
     def _delete_document_sync(self, document_id: uuid.UUID) -> int:
@@ -154,8 +154,8 @@ class VectorStore:
         self,
         query_embedding: list[float],
         top_k: int = 5,
-        filters: Optional[dict] = None,
-        similarity_threshold: Optional[float] = None,
+        filters: dict | None = None,
+        similarity_threshold: float | None = None,
     ) -> list[dict]:
         return await asyncio.to_thread(
             self._search_sync, query_embedding, top_k, filters, similarity_threshold

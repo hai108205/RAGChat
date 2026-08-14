@@ -64,3 +64,26 @@ include = ["src*"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+# ============================================================================
+# Cấu hình Ruff (lint + format)
+# ----------------------------------------------------------------------------
+# - BLE001: cho phép `except Exception` — đây là pattern chủ đích của code web
+#   (API/worker) để bắt lỗi chung và trả HTTP 500 / đánh dấu job lỗi, không phải
+#   sơ suất. Ruff mặc định coi đây là lỗi nên ta tắt rule này.
+# - B008: FastAPI idiom hợp lệ khi dùng `Security()`, `File()` làm default
+#   argument — framework yêu cầu vậy, không phải anti-pattern.
+# - Ngoài ra các rule thật (F401 unused import, F841 unused var, RUF0xx, ...)
+#   vẫn được giữ nguyên và CHẶN build.
+# Lưu ý: bảng `[tool.ruff]` này còn khiến kết quả `ruff check` nhất quán giữa
+# máy local và GitHub Actions bất kể phiên bản ruff.
+# ============================================================================
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+ignore = [
+  "BLE001",  # cho phép catch Exception chủ đích (web/worker error handling)
+  "B008",    # FastAPI Security()/File() default args là idiom hợp lệ
+]

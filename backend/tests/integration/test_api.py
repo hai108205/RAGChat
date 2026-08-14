@@ -2,9 +2,10 @@
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+
+from src.config import settings
 from src.main import app
 from src.state import state
-from src.config import settings
 
 
 class FakeVectorStore:
@@ -56,6 +57,7 @@ async def test_metrics_endpoint(client: AsyncClient):
 
 # ── Chat endpoint validation ──────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_chat_requires_query(client: AsyncClient):
     """Chat endpoint rejects empty query."""
@@ -69,16 +71,20 @@ async def test_chat_requires_query(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_chat_accepts_valid_request(client: AsyncClient):
     """Chat endpoint returns 503 when the pipeline is not initialized (test env)."""
-    response = await client.post("/api/chat", json={
-        "query": "What is the leave policy?",
-        "user_id": "user123",
-        "room_id": "room456",
-    })
+    response = await client.post(
+        "/api/chat",
+        json={
+            "query": "What is the leave policy?",
+            "user_id": "user123",
+            "room_id": "room456",
+        },
+    )
     assert response.status_code == 503
     assert response.json()["detail"] == "Backend not initialized"
 
 
 # ── Search endpoint validation ────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_search_requires_query(client: AsyncClient):
@@ -102,6 +108,7 @@ async def test_search_validates_top_k_range(client: AsyncClient):
 
 # ── Summarize endpoint validation ─────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_summarize_requires_text(client: AsyncClient):
     """Summarize endpoint rejects empty text."""
@@ -112,13 +119,14 @@ async def test_summarize_requires_text(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_summarize_accepts_valid_request(client: AsyncClient):
     """Summarize endpoint returns 503 when the pipeline is not initialized."""
-    response = await client.post("/api/summarize", json={
-        "text": "This is a long text that needs to be summarized."
-    })
+    response = await client.post(
+        "/api/summarize", json={"text": "This is a long text that needs to be summarized."}
+    )
     assert response.status_code == 503
 
 
 # ── Explain endpoint validation ───────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_explain_requires_concept(client: AsyncClient):
@@ -130,13 +138,12 @@ async def test_explain_requires_concept(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_explain_accepts_valid_request(client: AsyncClient):
     """Explain endpoint returns 503 when the pipeline is not initialized."""
-    response = await client.post("/api/explain", json={
-        "concept": "quantum computing"
-    })
+    response = await client.post("/api/explain", json={"concept": "quantum computing"})
     assert response.status_code == 503
 
 
 # ── Translate endpoint validation ─────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_translate_requires_text(client: AsyncClient):
@@ -148,13 +155,12 @@ async def test_translate_requires_text(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_translate_default_target_lang(client: AsyncClient):
     """Translate endpoint returns 503 when the pipeline is not initialized."""
-    response = await client.post("/api/translate", json={
-        "text": "Hello world"
-    })
+    response = await client.post("/api/translate", json={"text": "Hello world"})
     assert response.status_code == 503
 
 
 # ── Documents endpoint validation ─────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_list_documents(client: AsyncClient, fake_vector_store):
@@ -183,9 +189,9 @@ async def test_delete_invalid_uuid(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_upload_unsupported_format(client: AsyncClient):
     """Upload with unsupported format returns 400."""
-    response = await client.post("/api/documents", files={
-        "file": ("test.exe", b"binary content", "application/octet-stream")
-    })
+    response = await client.post(
+        "/api/documents", files={"file": ("test.exe", b"binary content", "application/octet-stream")}
+    )
     assert response.status_code == 400
     assert "Unsupported" in response.json()["detail"]
 
@@ -193,9 +199,7 @@ async def test_upload_unsupported_format(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_upload_without_filename(client: AsyncClient):
     """Upload without filename returns 422 (FastAPI rejects empty filename)."""
-    response = await client.post("/api/documents", files={
-        "file": ("", b"content", "text/plain")
-    })
+    response = await client.post("/api/documents", files={"file": ("", b"content", "text/plain")})
     assert response.status_code == 422
 
 
@@ -203,9 +207,10 @@ async def test_upload_without_filename(client: AsyncClient):
 async def test_upload_txt_document(client: AsyncClient, fake_vector_store, tmp_path):
     """Upload a valid .txt document (sync indexing with stubbed embedder/store)."""
     settings.upload_dir = str(tmp_path / "uploads")
-    response = await client.post("/api/documents", files={
-        "file": ("test.txt", b"This is a test document content for indexing.", "text/plain")
-    })
+    response = await client.post(
+        "/api/documents",
+        files={"file": ("test.txt", b"This is a test document content for indexing.", "text/plain")},
+    )
     # Sync ingest needs a real embedder/vector store; without them the
     # endpoint must fail cleanly with 500, not crash the server.
     assert response.status_code in (200, 500)
@@ -228,7 +233,5 @@ async def test_upload_multiple_formats(client: AsyncClient, fake_vector_store, t
         ("doc.csv", b"col1,col2\nval1,val2", "text/csv"),
     ]
     for filename, content, mime in formats:
-        response = await client.post("/api/documents", files={
-            "file": (filename, content, mime)
-        })
+        response = await client.post("/api/documents", files={"file": (filename, content, mime)})
         assert response.status_code in (200, 400, 500)

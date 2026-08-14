@@ -106,6 +106,7 @@ Translation:"""
 # Prompt builder class
 # ---------------------------------------------------------------------------
 
+
 class PromptBuilder:
     """Build prompts for all RAGChat use cases.
 
@@ -257,15 +258,11 @@ class PromptBuilder:
 
     @staticmethod
     def build_summarize_prompt(text: str) -> str:
-        return PromptTemplate.from_template(SUMMARIZE_PROMPT).format_prompt(
-            text=text
-        ).to_string().strip()
+        return PromptTemplate.from_template(SUMMARIZE_PROMPT).format_prompt(text=text).to_string().strip()
 
     @staticmethod
     def build_explain_prompt(concept: str) -> str:
-        return PromptTemplate.from_template(EXPLAIN_PROMPT).format_prompt(
-            concept=concept
-        ).to_string().strip()
+        return PromptTemplate.from_template(EXPLAIN_PROMPT).format_prompt(concept=concept).to_string().strip()
 
     @staticmethod
     def build_translate_prompt(text: str, target_lang: str) -> str:
@@ -279,6 +276,9 @@ class PromptBuilder:
             "de": "German",
             "es": "Spanish",
         }.get(target_lang, target_lang)
-        return PromptTemplate.from_template(TRANSLATE_PROMPT).format_prompt(
-            text=text, target_lang=lang_name
-        ).to_string().strip()
+        return (
+            PromptTemplate.from_template(TRANSLATE_PROMPT)
+            .format_prompt(text=text, target_lang=lang_name)
+            .to_string()
+            .strip()
+        )

@@ -1,6 +1,5 @@
 """Unit tests for DocumentCleaner."""
 
-import pytest
 from src.rag.document.cleaner import DocumentCleaner
 
 

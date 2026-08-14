@@ -1,13 +1,12 @@
 """Document loader — loads files of various formats into text."""
 
 from pathlib import Path
-from typing import Optional
 
 
 class DocumentLoader:
     """Load documents from file paths, returning raw text."""
 
-    SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".pptx", ".csv", ".xlsx", ".html"}
+    SUPPORTED_EXTENSIONS = frozenset({".pdf", ".docx", ".txt", ".md", ".pptx", ".csv", ".xlsx", ".html"})
 
     def load(self, file_path: str | Path) -> str:
         """Load a document file and return its full text content.
@@ -37,9 +36,7 @@ class DocumentLoader:
             return self._load_docx(file_path)
         elif ext == ".pptx":
             return self._load_pptx(file_path)
-        elif ext in {".txt", ".md", ".html"}:
-            return self._load_text(file_path)
-        elif ext in {".csv"}:
+        elif ext in {".txt", ".md", ".html"} or ext in {".csv"}:
             return self._load_text(file_path)
         elif ext in {".xlsx"}:
             return self._load_xlsx(file_path)

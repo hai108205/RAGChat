@@ -4,8 +4,6 @@ These tests mirror the logic in src/utils/Validator.ts to ensure
 input validation logic is correct.
 """
 
-import pytest
-
 
 class TestValidatorLogic:
     """Mirror tests for the TypeScript Validator class."""
@@ -14,6 +12,7 @@ class TestValidatorLogic:
         # Equivalent to Validator.isValidUrl()
         def is_valid_url(url):
             from urllib.parse import urlparse
+
             parsed = urlparse(url)
             return parsed.scheme in ("http", "https")
 

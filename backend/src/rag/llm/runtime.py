@@ -20,6 +20,7 @@ def create_chat_model(
     api_key: str,
     temperature: float = 0.7,
     max_tokens: int = 2048,
+    base_url: str = "",
 ) -> BaseChatModel:
     """Create the appropriate LangChain chat model for the given provider.
 
@@ -29,6 +30,8 @@ def create_chat_model(
         api_key: API key for authentication.
         temperature: Sampling temperature (0.0-1.0). Defaults to 0.7.
         max_tokens: Maximum tokens in the generated response. Defaults to 2048.
+        base_url: Optional base URL override for the provider endpoint (e.g. a
+            local OpenAI-compatible gateway). Empty string uses the provider default.
 
     Returns:
         A LangChain ``BaseChatModel`` instance.
@@ -37,19 +40,25 @@ def create_chat_model(
         ValueError: If *provider* is not supported.
     """
     if provider == "openai":
-        return ChatOpenAI(
-            openai_api_key=api_key,
-            model_name=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        kwargs: dict[str, Any] = {
+            "openai_api_key": api_key,
+            "model_name": model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if base_url:
+            kwargs["base_url"] = base_url
+        return ChatOpenAI(**kwargs)
     if provider == "claude":
-        return ChatAnthropic(
-            anthropic_api_key=api_key,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        kwargs = {
+            "anthropic_api_key": api_key,
+            "model": model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if base_url:
+            kwargs["base_url"] = base_url
+        return ChatAnthropic(**kwargs)
     raise ValueError(f"Unsupported LLM provider: {provider}")
 
 

@@ -7,8 +7,6 @@ Uses MinIO's async client for non-blocking uploads/downloads.
 from __future__ import annotations
 
 import io
-from pathlib import Path
-from typing import Optional
 
 from minio import Minio
 from minio.error import S3Error
@@ -38,6 +36,7 @@ class ObjectStore:
     async def ensure_bucket(self) -> None:
         """Create the bucket if it doesn't exist."""
         import asyncio
+
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None,
@@ -49,9 +48,12 @@ class ObjectStore:
         if not found:
             self._client.make_bucket(self.BUCKET_NAME)
 
-    async def upload(self, object_name: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+    async def upload(
+        self, object_name: str, data: bytes, content_type: str = "application/octet-stream"
+    ) -> str:
         """Upload a file to MinIO. Returns the object name."""
         import asyncio
+
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None,
@@ -74,6 +76,7 @@ class ObjectStore:
     async def download(self, object_name: str) -> bytes:
         """Download a file from MinIO."""
         import asyncio
+
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
@@ -95,6 +98,7 @@ class ObjectStore:
     async def delete(self, object_name: str) -> None:
         """Delete a file from MinIO."""
         import asyncio
+
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None,
@@ -114,6 +118,7 @@ class ObjectStore:
     async def delete_prefix(self, prefix: str) -> int:
         """Delete all objects with a given prefix. Returns count of deleted objects."""
         import asyncio
+
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
@@ -139,6 +144,7 @@ class ObjectStore:
     async def exists(self, object_name: str) -> bool:
         """Check if an object exists."""
         import asyncio
+
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
@@ -158,7 +164,7 @@ class ObjectStore:
 
 
 # Singleton
-_object_store: Optional[ObjectStore] = None
+_object_store: ObjectStore | None = None
 
 
 def get_object_store() -> ObjectStore:

@@ -34,9 +34,7 @@ class DocumentChunker:
             return []
         return self._splitter.split_text(text)
 
-    def split_with_metadata(
-        self, text: str, base_metadata: dict, page: int | None = None
-    ) -> list[dict]:
+    def split_with_metadata(self, text: str, base_metadata: dict, page: int | None = None) -> list[dict]:
         """Split text and attach metadata to each chunk.
 
         Args:

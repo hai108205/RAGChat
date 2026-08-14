@@ -1,8 +1,9 @@
 """Pytest configuration for the RAGChat backend tests."""
 
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
 
 # Ensure backend/src is in the path
 backend_src = Path(__file__).resolve().parent.parent / "src"

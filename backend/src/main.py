@@ -5,17 +5,17 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api import chat, documents
 from src.config import settings
-from src.storage.vectorstore import VectorStore
+from src.helpers.log import get_logger
+from src.monitoring import setup_metrics
 from src.rag.embedding.embedder import Embedder
 from src.rag.llm.runtime import create_chat_model
 from src.rag.pipeline import RAGPipeline
-from src.monitoring import setup_metrics
-from src.api import chat, documents
-from src.taskqueue import close_redis_pool
 from src.services.chat_service.chat_history import init_chat_history
 from src.state import state
-from src.helpers.log import get_logger
+from src.storage.vectorstore import VectorStore
+from src.taskqueue import close_redis_pool
 
 logger = get_logger(__name__)
 
@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI):
     state.embedder = Embedder(
         api_key=settings.openai_api_key,
         model=settings.embedding_model,
+        base_url=settings.openai_base_url,
     )
 
     state.vector_store = VectorStore(
@@ -41,6 +42,9 @@ async def lifespan(app: FastAPI):
         api_key=settings.openai_api_key if settings.llm_provider == "openai" else settings.anthropic_api_key,
         temperature=settings.temperature,
         max_tokens=settings.max_tokens,
+        base_url=(
+            settings.openai_base_url if settings.llm_provider == "openai" else settings.anthropic_base_url
+        ),
     )
 
     state.pipeline = RAGPipeline(

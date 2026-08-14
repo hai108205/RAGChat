@@ -84,9 +84,7 @@ class DocumentRegistry:
 
     def get_by_filename(self, filename: str) -> DocumentRecord | None:
         """Look up a document by its filename."""
-        return self._session.exec(
-            select(DocumentRecord).where(DocumentRecord.filename == filename)
-        ).first()
+        return self._session.exec(select(DocumentRecord).where(DocumentRecord.filename == filename)).first()
 
     def get_stale_documents(
         self,
@@ -108,9 +106,7 @@ class DocumentRegistry:
         new_ids = current_ids - stored_ids
         deleted_ids = stored_ids - current_ids
         changed_ids = {
-            doc_id
-            for doc_id in current_ids & stored_ids
-            if current_docs[doc_id] != stored[doc_id]
+            doc_id for doc_id in current_ids & stored_ids if current_docs[doc_id] != stored[doc_id]
         }
 
         return new_ids, changed_ids, deleted_ids

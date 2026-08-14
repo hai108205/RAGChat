@@ -3,7 +3,6 @@
 import asyncio
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any
 
 from langchain_core.documents import Document
 
@@ -65,7 +64,6 @@ class CreateAndRefineStrategy(BaseSynthesisStrategy):
     ) -> tuple[str, list[str]]:
         cur_response = None
         fmt_prompts = []
-        num_of_contents = len(retrieved_contents)
 
         for idx, node in enumerate(retrieved_contents, start=1):
             logger.info(f"--- Generating an answer for the chunk {idx} ... ---")
@@ -121,10 +119,7 @@ class TreeSummarizationStrategy(BaseSynthesisStrategy):
             )
             return idx, answer, f"{system_prompt}\n\n{user_message}"
 
-        tasks = [
-            process_chunk(idx, content)
-            for idx, content in enumerate(retrieved_contents, start=1)
-        ]
+        tasks = [process_chunk(idx, content) for idx, content in enumerate(retrieved_contents, start=1)]
         results = await asyncio.gather(*tasks)
 
         # Sort by index

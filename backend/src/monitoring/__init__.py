@@ -1,9 +1,8 @@
 """Prometheus metrics instrumentation for FastAPI."""
 
-from prometheus_fastapi_instrumentator import Instrumentator, metrics
-from prometheus_fastapi_instrumentator.metrics import Info
-from prometheus_client import Counter, Histogram, Gauge
 from fastapi import FastAPI
+from prometheus_client import Counter, Gauge, Histogram
+from prometheus_fastapi_instrumentator import Instrumentator, metrics
 
 # Custom application metrics
 rag_requests_total = Counter(

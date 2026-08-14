@@ -1,6 +1,5 @@
 """Unit tests for PromptBuilder."""
 
-import pytest
 from src.rag.prompt.builder import PromptBuilder
 
 
@@ -45,7 +44,7 @@ class TestPromptBuilder:
         ]
 
         context_docs = [{"filename": "policy.pdf", "content": "Up to 5 days can be carried over."}]
-        system, user = PromptBuilder.build_rag_prompt(
+        _system, user = PromptBuilder.build_rag_prompt(
             query="How many days can I carry over?",
             context_docs=context_docs,
             history=history,
@@ -56,16 +55,13 @@ class TestPromptBuilder:
 
     def test_build_rag_prompt_without_page(self):
         context_docs = [{"filename": "notes.txt", "content": "Some content."}]
-        system, user = PromptBuilder.build_rag_prompt("query", context_docs)
-        assert "Page" not in system
+        _system, _user = PromptBuilder.build_rag_prompt("query", context_docs)
+        assert "Page" not in _system
 
     def test_build_rag_prompt_truncates_long_history(self):
-        history = [
-            {"role": "user", "content": f"Message {i}"}
-            for i in range(20)
-        ]
+        history = [{"role": "user", "content": f"Message {i}"} for i in range(20)]
         context_docs = [{"filename": "doc.txt", "content": "Test."}]
-        system, user = PromptBuilder.build_rag_prompt(
+        _system, user = PromptBuilder.build_rag_prompt(
             query="test query",
             context_docs=context_docs,
             history=history,

@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+
 from src.rag.document.parser import DocumentParser, ParsedDocument
 
 

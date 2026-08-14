@@ -5,6 +5,8 @@ wrapping the LangChain OpenAIEmbeddings client with thread-pool offloading.
 """
 
 import asyncio
+from typing import Any
+
 from langchain_core.embeddings import Embeddings
 from langchain_openai import OpenAIEmbeddings
 
@@ -20,18 +22,28 @@ class Embedder:
         dimension: The fixed output dimension (1536 for text-embedding-3-small).
     """
 
-    def __init__(self, api_key: str, model: str = "text-embedding-3-small") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "text-embedding-3-small",
+        base_url: str = "",
+    ) -> None:
         """Initialise the embedder with an OpenAI API key and model.
 
         Args:
             api_key: OpenAI API key.
             model: Embedding model identifier. Defaults to text-embedding-3-small.
+            base_url: Optional OpenAI-compatible base URL (local gateway/proxy).
+                Empty string uses the OpenAI default endpoint.
         """
-        self._embeddings: Embeddings = OpenAIEmbeddings(
-            openai_api_key=api_key,
-            model=model,
-            dimensions=1536,  # explicitly set for text-embedding-3-small
-        )
+        kwargs: dict[str, Any] = {
+            "openai_api_key": api_key,
+            "model": model,
+            "dimensions": 1536,
+        }
+        if base_url:
+            kwargs["base_url"] = base_url
+        self._embeddings: Embeddings = OpenAIEmbeddings(**kwargs)
         self._model_name = model
 
     async def embed_query(self, text: str) -> list[float]:

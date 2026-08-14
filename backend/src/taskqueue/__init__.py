@@ -6,10 +6,8 @@ background jobs, ensuring the request doesn't timeout on large files.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from pathlib import Path
-from typing import Optional
 
 from arq import ArqRedis, create_pool
 from arq.connections import RedisSettings
@@ -17,12 +15,15 @@ from arq.connections import RedisSettings
 from src.config import settings
 from src.helpers.log import get_logger
 from src.services.app_callback import notify_app
-from src.services.ingest_documents_service.ingest import ingest_document, remove_from_registry
+from src.services.ingest_documents_service.ingest import (
+    ingest_document,
+    remove_from_registry,
+)
 
 logger = get_logger(__name__)
 
 # Global ARQ Redis pool — initialized at startup
-_redis_pool: Optional[ArqRedis] = None
+_redis_pool: ArqRedis | None = None
 
 
 async def get_redis_pool() -> ArqRedis:
@@ -42,6 +43,7 @@ async def close_redis_pool() -> None:
 # ---------------------------------------------------------------------------
 # Background job functions (called by ARQ worker)
 # ---------------------------------------------------------------------------
+
 
 async def index_document_job(
     ctx: dict,
@@ -144,6 +146,7 @@ async def delete_document_job(
 # Enqueue helpers (called from API endpoints)
 # ---------------------------------------------------------------------------
 
+
 async def enqueue_index_document(
     doc_id: str,
     filename: str,
@@ -198,7 +201,7 @@ class WorkerSettings:
     Used by: arq src.taskqueue.WorkerSettings
     """
 
-    functions = [index_document_job, delete_document_job]
+    functions = (index_document_job, delete_document_job)
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = 10
     job_timeout = 600  # 10 minutes for large documents
