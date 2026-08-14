@@ -72,10 +72,18 @@ jobs:
         with:
           python-version: "3.12"
 
+      # 3. Cài dependency của backend theo khóa sẵn trong pyproject.toml.
+      #
+      #    LƯU Ý: KHÔNG dùng `pip install -e ".[dev]"` (editable).
+      #    Trước đây CI từng lỗi `AttributeError: module 'hatchling.build' has
+      #    no attribute 'prepare_metadata_for_build_editable'` trong build
+      #    isolation của pip — hatchling chưa export hook editable ổn định.
+      #    Vì CI chỉ cần chạy test (không cần cấu hình source có thể sửa
+      #    ngay lập tức), cài bản thường `.[dev]` là đủ và tránh được lỗi này.
       - name: Install dependencies
         run: |
           cd backend
-          pip install -e ".[dev]"
+          pip install ".[dev]"
 
       - name: Lint with Ruff
         run: |
