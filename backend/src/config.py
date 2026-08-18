@@ -35,12 +35,26 @@ class Settings(BaseSettings):
 
     # Retrieval
     top_k: int = 5
-    similarity_threshold: float = 0.3  # Plan 2.4: configurable relevance threshold
+    similarity_threshold: float = 0.3  # cosine similarity below which a chunk is discarded (0.0-1.0)
+
+    # Hybrid search (dense vector + keyword) — enable to improve exact-match recall
+    use_hybrid_search: bool = False
+    hybrid_weight: float = 0.5  # dense weight; keyword = 1 - weight (0.0-1.0)
+
+    # Query expansion (Multi-Query) — LLM generates N paraphrases & results are merged
+    use_query_expansion: bool = False
+    query_expansion_count: int = 3
+
+    # Access control — when true, retrieval is scoped to the requester's room
+    enforce_room_isolation: bool = True
 
     # Document processing
     chunk_size: int = 1000
     chunk_overlap: int = 200
     upload_dir: str = "./data/uploads"
+    # "recursive" = fixed-size markdown-aware split; "semantic" = structure/table-aware
+    chunking_strategy: str = "semantic"
+    protect_tables: bool = True  # keep markdown/CSV table rows intact in a single chunk
 
     # Server
     host: str = "0.0.0.0"
