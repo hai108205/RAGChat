@@ -54,6 +54,8 @@ async def index_document_job(
     chunk_overlap: int = 200,
     user_id: str = "",
     room_id: str = "",
+    chunking_strategy: str = "semantic",
+    protect_tables: bool = True,
 ) -> dict:
     """Background job: parse, chunk, embed, and store a document.
 
@@ -64,8 +66,10 @@ async def index_document_job(
         file_path_str: Path to the uploaded file on disk.
         chunk_size: Text chunk size.
         chunk_overlap: Text chunk overlap.
-        user_id: Uploading Rocket.Chat user (for callback notification).
-        room_id: Uploading Rocket.Chat room (for callback notification).
+        user_id: Uploading Rocket.Chat user (for callback notification + ACL).
+        room_id: Uploading Rocket.Chat room (for callback notification + ACL).
+        chunking_strategy: "recursive" or "semantic" splitting.
+        protect_tables: Keep table/code blocks intact under semantic splitting.
 
     Returns:
         Dict with status, document_id, chunks_count.
@@ -87,6 +91,10 @@ async def index_document_job(
             vector_store=vector_store,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
+            user_id=user_id,
+            room_id=room_id,
+            chunking_strategy=chunking_strategy,
+            protect_tables=protect_tables,
         )
 
         await notify_app(
@@ -165,6 +173,8 @@ async def enqueue_index_document(
         settings.chunk_overlap,
         user_id,
         room_id,
+        settings.chunking_strategy,
+        settings.protect_tables,
         _job_id=f"index:{doc_id}",
     )
     return job.job_id
@@ -216,8 +226,9 @@ class WorkerSettings:
         embedder = Embedder(
             api_key=settings.openai_api_key,
             model=settings.embedding_model,
+            base_url=settings.openai_base_url,
         )
-        vector_store = VectorStore(settings.database_url)
+        vector_store = VectorStore(settings.database_url, embeddings=embedder.embeddings)
         await vector_store.initialize()
 
         ctx["embedder"] = embedder

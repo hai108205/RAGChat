@@ -32,8 +32,18 @@ async def ingest_document(
     vector_store,
     chunk_size: int = 1000,
     chunk_overlap: int = 200,
+    user_id: str = "",
+    room_id: str = "",
+    chunking_strategy: str = "semantic",
+    protect_tables: bool = True,
 ) -> dict:
     """Parse, chunk, embed, and store a document; maintain the registry.
+
+    Args:
+        user_id: Uploading Rocket.Chat user (stored in chunk metadata for ACL).
+        room_id: Uploading Rocket.Chat room (used to scope retrieval by room).
+        chunking_strategy: "recursive" or "semantic" splitting.
+        protect_tables: Keep table/code blocks intact when using semantic splitting.
 
     Returns:
         Dict with status ('indexed' | 'unchanged'), chunks_count, version_hash.
@@ -60,7 +70,12 @@ async def ingest_document(
     loader = DocumentLoader()
     parser = DocumentParser()
     cleaner = DocumentCleaner()
-    chunker = DocumentChunker(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    chunker = DocumentChunker(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        strategy=chunking_strategy,
+        protect_tables=protect_tables,
+    )
 
     raw_text = loader.load(file_path)
     parsed = parser.parse(file_path, raw_text)
@@ -83,6 +98,9 @@ async def ingest_document(
                     "file_format": parsed.metadata.get("file_format", ""),
                     "chunk_index": i,
                     "chunk_total": len(chunks),
+                    # Data access control — scope retrieval to the owning room/user.
+                    "room_id": room_id,
+                    "user_id": user_id,
                 },
             }
         )

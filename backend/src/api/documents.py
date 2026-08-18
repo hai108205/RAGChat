@@ -107,6 +107,10 @@ async def _process_upload(
         vector_store=state.vector_store,
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
+        user_id=user_id or "",
+        room_id=room_id or "",
+        chunking_strategy=settings.chunking_strategy,
+        protect_tables=settings.protect_tables,
     )
 
     if result["status"] == "unchanged":
