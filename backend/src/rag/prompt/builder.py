@@ -78,6 +78,13 @@ RAG_USER_PROMPT = """{history}User question: {query}
 
 Please provide a clear, accurate answer based on the context above. Include citations for each claim."""
 
+QUERY_EXPANSION_PROMPT = """Generate {count} alternative phrasings for the query below.
+Each variant must preserve the original meaning but use different wording.
+Output exactly one variant per line, no numbering, no preamble, no explanation.
+
+Query: {query}"""
+
+
 SUMMARIZE_PROMPT = """You are a professional text summarizer. Summarize the following text in a clear, concise way.
 Preserve all key information, facts, and figures. Use bullet points where appropriate.
 
@@ -255,6 +262,16 @@ class PromptBuilder:
     # ------------------------------------------------------------------
     # Utility prompts
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def build_query_expansion_prompt(query: str, count: int) -> str:
+        """Build a prompt that asks the LLM for N paraphrased query variants."""
+        return (
+            PromptTemplate.from_template(QUERY_EXPANSION_PROMPT)
+            .format_prompt(query=query, count=count)
+            .to_string()
+            .strip()
+        )
 
     @staticmethod
     def build_summarize_prompt(text: str) -> str:

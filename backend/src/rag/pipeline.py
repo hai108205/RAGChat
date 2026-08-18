@@ -5,6 +5,7 @@ import time
 from langchain_core.documents import Document
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from src.config import settings
 from src.monitoring import (
     embedding_requests_total,
     llm_call_duration_seconds,
@@ -60,6 +61,8 @@ class RAGPipeline:
         query: str,
         history: list[dict] | None = None,
         chat_history: ChatHistory | None = None,
+        room_id: str | None = None,
+        user_id: str | None = None,
     ) -> dict:
         """Answer a question using RAG with conversation-aware refinement.
 
@@ -67,6 +70,8 @@ class RAGPipeline:
             query: User's question.
             history: Optional conversation history [{role, content}, ...].
             chat_history: Optional server-side ChatHistory ring buffer.
+            room_id: Optional room scope — restricts retrieval to this room's documents.
+            user_id: Optional user scope — restricts retrieval to this user's documents.
 
         Returns:
             Dict with 'answer', 'sources', and 'model' keys.
@@ -83,19 +88,28 @@ class RAGPipeline:
                     prompt_builder=self._prompt_builder,
                 )
 
-            # 2. Embed refined query
-            query_embedding = await self._embedder.embed_query(refined_query)
-            embedding_requests_total.labels(model=getattr(self._embedder, "model_name", "unknown")).inc()
+            # 2. Build access-control filters (scoped by room when enforced)
+            filters = self._build_access_filters(room_id=room_id, user_id=user_id)
 
-            # 3. Retrieve relevant chunks
+            # 3. Query expansion — generate N paraphrases to widen recall
+            queries = [refined_query]
+            if settings.use_query_expansion:
+                queries = await self._expand_queries(refined_query)
+                queries.append(refined_query)
+
+            # 4. Retrieve relevant chunks (dense / hybrid) across all query variants
             t1 = time.monotonic()
-            results = await self._vector_store.search(
-                query_embedding,
+            results = await self._retrieve_multi(
+                queries=queries,
                 top_k=self._top_k,
+                filters=filters,
             )
             vector_search_duration_seconds.observe(time.monotonic() - t1)
 
-            # 4. Convert to Document objects for synthesis
+            # 5. Strict relevance filter (context compression) — avoid lost-in-middle
+            results = self._filter_results(results, top_k=self._top_k)
+
+            # 6. Convert to Document objects for synthesis
             retrieved_docs = []
             for doc in results:
                 retrieved_docs.append(
@@ -110,7 +124,7 @@ class RAGPipeline:
                     )
                 )
 
-            # 5. Synthesize answer using chosen strategy
+            # 7. Synthesize answer using chosen strategy
             llm_start = time.monotonic()
             answer, _fmt_prompts = await answer_with_context(
                 llm=self._llm,
@@ -129,7 +143,7 @@ class RAGPipeline:
                 model=getattr(self._llm, "model_name", "unknown"),
             ).inc()
 
-            # 6. Format sources
+            # 8. Format sources
             sources = []
             seen = set()
             for doc in results:
@@ -145,7 +159,7 @@ class RAGPipeline:
                         }
                     )
 
-            # 7. Update chat history
+            # 9. Update chat history
             if chat_history is not None:
                 chat_history.append(f"Q: {query}\nA: {answer}")
 
@@ -161,18 +175,131 @@ class RAGPipeline:
         finally:
             rag_request_duration_seconds.labels(endpoint="chat").observe(time.monotonic() - start)
 
-    async def search(self, query: str, top_k: int = 5) -> list[dict]:
-        """Search documents by semantic similarity.
+    @staticmethod
+    def _build_access_filters(
+        room_id: str | None = None,
+        user_id: str | None = None,
+    ) -> dict:
+        """Build metadata-scope filters for data access control.
+
+        When ``settings.enforce_room_isolation`` is true, retrieval is restricted
+        to the requesting room (and user) so one room cannot read another's docs.
+        """
+        if not settings.enforce_room_isolation:
+            return {}
+        filters: dict = {}
+        if room_id:
+            filters["room_id"] = room_id
+        if user_id:
+            filters["user_id"] = user_id
+        return filters
+
+    async def _expand_queries(self, query: str) -> list[str]:
+        """Generate paraphrased variants of ``query`` to widen retrieval recall.
+
+        Uses the LLM to produce up to ``settings.query_expansion_count`` alternative
+        phrasings. Returns the variants (may be empty on failure).
+        """
+        n = max(1, settings.query_expansion_count)
+        prompt = self._prompt_builder.build_query_expansion_prompt(query, n)
+        raw = await ainvoke(
+            self._llm,
+            system_prompt="You are a query reformulation assistant.",
+            user_message=prompt,
+            max_tokens=256,
+        )
+        variants = []
+        for line in raw.splitlines():
+            line = line.strip().lstrip("0123456789.-) ").strip()
+            if line and line != query and line not in variants:
+                variants.append(line)
+            if len(variants) >= n:
+                break
+        return variants
+
+    async def _retrieve_multi(
+        self,
+        queries: list[str],
+        top_k: int,
+        filters: dict | None,
+    ) -> list[dict]:
+        """Retrieve chunks for multiple query variants and merge (dedup) results.
+
+        Runs one vector/hybrid search per query embedding; dedups by chunk
+        ``id``/content and aggregates the max relevance across variants.
+        """
+        mode = "hybrid" if settings.use_hybrid_search else "dense"
+        per_query_top_k = top_k
+
+        async def _search_one(q: str) -> list[dict]:
+            embedding = await self._embedder.embed_query(q)
+            embedding_requests_total.labels(model=getattr(self._embedder, "model_name", "unknown")).inc()
+            return await self._vector_store.search(
+                embedding,
+                top_k=per_query_top_k,
+                filters=filters,
+                similarity_threshold=settings.similarity_threshold,
+                query_text=q,
+                mode=mode,
+            )
+
+        # Sequential is fine for a handful of variants; avoids clobbering embedder rate limits.
+        merged: dict[str, dict] = {}
+        for q in queries:
+            results = await _search_one(q)
+            for doc in results:
+                key = doc.get("id") or f"{doc['document_id']}:{doc['content'][:80]}"
+                if key not in merged:
+                    merged[key] = doc
+                else:
+                    # Keep the max relevance across query variants.
+                    merged[key]["relevance"] = max(
+                        merged[key].get("relevance", 0.0),
+                        doc.get("relevance", 0.0),
+                    )
+        return list(merged.values())
+
+    @staticmethod
+    def _filter_results(results: list[dict], top_k: int) -> list[dict]:
+        """Strict relevance filter + truncation to avoid lost-in-the-middle.
+
+        Drops chunks already rejected by the vector store threshold, sorts by
+        relevance descending, and caps the number fed into synthesis at ``top_k``.
+        """
+        relevant = [r for r in results if r.get("relevance", 0.0) >= settings.similarity_threshold]
+        relevant.sort(key=lambda r: r.get("relevance", 0.0), reverse=True)
+        return relevant[:top_k]
+
+    async def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        room_id: str | None = None,
+        user_id: str | None = None,
+    ) -> list[dict]:
+        """Search documents by semantic similarity (optionally scoped by room/user).
 
         Args:
             query: Search query.
             top_k: Number of results to return.
+            room_id: Optional room scope for access control.
+            user_id: Optional user scope for access control.
 
         Returns:
             List of search result dicts.
         """
+        filters = self._build_access_filters(room_id=room_id, user_id=user_id)
+        mode = "hybrid" if settings.use_hybrid_search else "dense"
         query_embedding = await self._embedder.embed_query(query)
-        results = await self._vector_store.search(query_embedding, top_k=top_k)
+        embedding_requests_total.labels(model=getattr(self._embedder, "model_name", "unknown")).inc()
+        results = await self._vector_store.search(
+            query_embedding,
+            top_k=top_k,
+            filters=filters,
+            similarity_threshold=settings.similarity_threshold,
+            query_text=query,
+            mode=mode,
+        )
 
         return [
             {

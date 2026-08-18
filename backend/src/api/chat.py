@@ -25,6 +25,8 @@ class ChatResponse(BaseModel):
 class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Search query")
     top_k: int = Field(5, ge=1, le=20, description="Number of results")
+    user_id: str | None = Field(None, description="Rocket.Chat user ID")
+    room_id: str | None = Field(None, description="Rocket.Chat room ID")
 
 
 class SearchResponse(BaseModel):
@@ -83,6 +85,8 @@ async def chat(request: ChatRequest):
             query=request.query,
             history=request.history,
             chat_history=state.chat_history,
+            room_id=request.room_id,
+            user_id=request.user_id,
         )
         return ChatResponse(**result)
     except HTTPException:
@@ -106,6 +110,8 @@ async def search(request: SearchRequest):
         results = await _require_pipeline().search(
             query=request.query,
             top_k=request.top_k,
+            room_id=request.room_id,
+            user_id=request.user_id,
         )
         return SearchResponse(results=results)
     except HTTPException:
