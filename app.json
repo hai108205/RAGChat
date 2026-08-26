@@ -18,13 +18,29 @@
         "IPreFileUpload"
     ],
     "permissions": [
-        { "name": "user.read" },
-        { "name": "user.write" },
-        { "name": "message.read" },
-        { "name": "message.write" },
-        { "name": "networking" },
-        { "name": "persistence" },
-        { "name": "slashcommand" },
-        { "name": "upload.read" }
+        {
+            "name": "user.read"
+        },
+        {
+            "name": "user.write"
+        },
+        {
+            "name": "message.read"
+        },
+        {
+            "name": "message.write"
+        },
+        {
+            "name": "networking"
+        },
+        {
+            "name": "persistence"
+        },
+        {
+            "name": "slashcommand"
+        },
+        {
+            "name": "upload.read"
+        }
     ]
 }

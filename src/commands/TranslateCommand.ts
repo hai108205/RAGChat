@@ -10,7 +10,7 @@ import {
 } from '@rocket.chat/apps-engine/definition/slashcommands';
 import { BackendClient } from '../lib/BackendClient';
 import { Formatter } from '../utils/Formatter';
-import { sendMessage } from '../utils/MessageHelper';
+import { sendMessage, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
 import { ERRORS } from '../constants/Errors';
 import { COMMANDS } from '../constants/Commands';
 
@@ -40,9 +40,10 @@ export class TranslateCommand implements ISlashCommand {
     ): Promise<void> {
         const args = context.getArguments();
         const room = context.getRoom();
+        const threadId = context.getThreadId();
 
         if (args.length === 0) {
-            await this.sendUsage(read, modify, room);
+            await this.sendUsage(read, modify, room, threadId);
             return;
         }
 
@@ -51,7 +52,10 @@ export class TranslateCommand implements ISlashCommand {
 
         const firstArg = args[0].toLowerCase();
 
-        if (SUPPORTED_LANGS[firstArg]) {
+        // Only treat the first token as a language code when there is remaining
+        // text after it — `/translate en hello` selects `en`, while `/translate en`
+        // (as the whole input) is translated as prose to the default Vietnamese.
+        if (args.length > 1 && SUPPORTED_LANGS[firstArg]) {
             targetLang = firstArg;
             text = args.slice(1).join(' ');
         } else {
@@ -59,19 +63,35 @@ export class TranslateCommand implements ISlashCommand {
         }
 
         if (!text) {
-            await this.sendUsage(read, modify, room);
+            await this.sendUsage(read, modify, room, threadId);
             return;
         }
+
+        const placeholderId = await sendPlaceholderMessage(
+            read, modify, room,
+            '🔍 _Đang dịch văn bản..._',
+            threadId,
+        );
 
         try {
             const client = new BackendClient(http, read);
             const translation = await client.translate(text, targetLang);
 
             const langName = SUPPORTED_LANGS[targetLang] || targetLang;
-            await sendMessage(read, modify, room, `**${langName}:**\n\n${translation}`);
+            const answer = `**${langName}:**\n\n${translation}`;
+
+            if (placeholderId) {
+                await updateMessage(placeholderId, read, modify, answer);
+            } else {
+                await sendMessage(read, modify, room, answer, undefined, threadId);
+            }
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
-            await sendMessage(read, modify, room, message);
+            if (placeholderId) {
+                await updateMessage(placeholderId, read, modify, message);
+            } else {
+                await sendMessage(read, modify, room, message, undefined, threadId);
+            }
         }
     }
 
@@ -79,6 +99,7 @@ export class TranslateCommand implements ISlashCommand {
         read: IRead,
         modify: IModify,
         room: unknown,
+        threadId?: string,
     ): Promise<void> {
         const langList = Object.entries(SUPPORTED_LANGS)
             .map(([code, name]) => `\`${code}\` = ${name}`)
@@ -92,6 +113,6 @@ export class TranslateCommand implements ISlashCommand {
             '_Default target language: Vietnamese (vi)_',
         ].join('\n');
 
-        await sendMessage(read, modify, room, usage);
+        await sendMessage(read, modify, room, usage, undefined, threadId);
     }
 }

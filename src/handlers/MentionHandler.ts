@@ -10,7 +10,7 @@ import { IPostMessageSent } from '@rocket.chat/apps-engine/definition/messages/I
 import { BackendClient } from '../lib/BackendClient';
 import { SessionStore } from '../persistence/sessionStore';
 import { Formatter } from '../utils/Formatter';
-import { sendMessage } from '../utils/MessageHelper';
+import { sendMessage, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
 import { readBoolean, readMaxHistory } from '../utils/SettingReader';
 import { ERRORS } from '../constants/Errors';
 import { BOT_PREFIX, BOT_SUB_COMMANDS } from '../constants/Commands';
@@ -74,6 +74,13 @@ export class MentionHandler implements IPostMessageSent {
             return;
         }
 
+        // Instant feedback so user never sees "still loading" for 3–20s
+        const placeholderId = await sendPlaceholderMessage(
+            read, modify, message.room,
+            '🔍 _Đang tra cứu tài liệu và suy nghĩ câu trả lời..._',
+            message.threadId,
+        );
+
         try {
             const client = new BackendClient(http, read);
             const sessionStore = new SessionStore(read, persistence);
@@ -99,10 +106,18 @@ export class MentionHandler implements IPostMessageSent {
                 ? Formatter.formatSources(response.sources)
                 : undefined;
 
-            await sendMessage(read, modify, message.room, response.answer, attachment, message.threadId);
+            if (placeholderId) {
+                await updateMessage(placeholderId, read, modify, response.answer, attachment);
+            } else {
+                await sendMessage(read, modify, message.room, response.answer, attachment, message.threadId);
+            }
         } catch (error: unknown) {
             const errMsg = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
-            await sendMessage(read, modify, message.room, errMsg, undefined, message.threadId);
+            if (placeholderId) {
+                await updateMessage(placeholderId, read, modify, errMsg, undefined);
+            } else {
+                await sendMessage(read, modify, message.room, errMsg, undefined, message.threadId);
+            }
         }
     }
 
@@ -178,20 +193,19 @@ export class MentionHandler implements IPostMessageSent {
         const trimmed = text.trim();
         // Explicit `@bot` mention — the boundary uses a lookahead so a trailing
         // non-word character (hyphen, dot, etc.) still terminates the match.
-        const mention = new RegExp(`@${this.escapeRegExp(botUsername)}(?=$|[\\s,.;:'"!?])`, 'i');
-        // Prefix command: `@ai ...` must start the message, not appear mid-word.
-        const command = new RegExp(`^${this.escapeRegExp(BOT_PREFIX)}(?=$|[\\s])`, 'i');
-        return mention.test(trimmed) || command.test(trimmed);
+        const botMention = new RegExp(`@${this.escapeRegExp(botUsername)}(?=$|[\\s,.;:'"!?])`, 'i');
+        // Prefix command: `@ai ...` can appear anywhere in the message now.
+        const prefixMention = new RegExp(`(^|\\s)${this.escapeRegExp(BOT_PREFIX)}(?=$|[\\s,.;:'"!?])`, 'i');
+        return botMention.test(trimmed) || prefixMention.test(trimmed);
     }
 
     private stripMention(text: string, botUsername: string): string {
-        const mention = new RegExp(`@${this.escapeRegExp(botUsername)}(?=$|[\\s,.;:'"!?])`, 'gi');
-        let stripped = text.replace(mention, '');
-        const command = new RegExp(`^${this.escapeRegExp(BOT_PREFIX)}(?=$|[\\s])`, 'i');
-        if (command.test(stripped.trim())) {
-            stripped = stripped.trim().replace(command, '');
-        }
-        return stripped;
+        const botMention = new RegExp(`@${this.escapeRegExp(botUsername)}(?=$|[\\s,.;:'"!?])`, 'gi');
+        const prefixMention = new RegExp(`(^|\\s)${this.escapeRegExp(BOT_PREFIX)}(?=$|[\\s,.;:'"!?])`, 'gi');
+        return text
+            .replace(botMention, '')
+            .replace(prefixMention, '')
+            .trim();
     }
 
     private escapeRegExp(value: string): string {

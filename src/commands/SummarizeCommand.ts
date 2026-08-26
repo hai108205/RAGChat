@@ -10,7 +10,7 @@ import {
 } from '@rocket.chat/apps-engine/definition/slashcommands';
 import { BackendClient } from '../lib/BackendClient';
 import { Formatter } from '../utils/Formatter';
-import { sendMessage } from '../utils/MessageHelper';
+import { sendMessage, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
 import { ERRORS } from '../constants/Errors';
 import { COMMANDS } from '../constants/Commands';
 
@@ -29,21 +29,38 @@ export class SummarizeCommand implements ISlashCommand {
     ): Promise<void> {
         const args = context.getArguments();
         const room = context.getRoom();
+        const threadId = context.getThreadId();
 
         if (args.length === 0) {
-            await sendMessage(read, modify, room, Formatter.usageCommand(COMMANDS.SUMMARIZE, '"text"'));
+            await sendMessage(read, modify, room, Formatter.usageCommand(COMMANDS.SUMMARIZE, '"text"'), undefined, threadId);
             return;
         }
 
         const text = args.join(' ');
 
+        const placeholderId = await sendPlaceholderMessage(
+            read, modify, room,
+            '🔍 _Đang tóm tắt văn bản..._',
+            threadId,
+        );
+
         try {
             const client = new BackendClient(http, read);
             const summary = await client.summarize(text);
-            await sendMessage(read, modify, room, `**Summary:**\n\n${summary}`);
+            const answer = `**Summary:**\n\n${summary}`;
+
+            if (placeholderId) {
+                await updateMessage(placeholderId, read, modify, answer);
+            } else {
+                await sendMessage(read, modify, room, answer, undefined, threadId);
+            }
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
-            await sendMessage(read, modify, room, message);
+            if (placeholderId) {
+                await updateMessage(placeholderId, read, modify, message);
+            } else {
+                await sendMessage(read, modify, room, message, undefined, threadId);
+            }
         }
     }
 }

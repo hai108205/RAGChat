@@ -2,11 +2,11 @@ import {
     IHttp,
     IHttpResponse,
     IRead,
-    HttpStatusCode,
 } from '@rocket.chat/apps-engine/definition/accessors';
 import { ERRORS } from '../constants/Errors';
 import { ChatMessage } from '../persistence/sessionStore';
 import { CitationSource } from '../utils/Formatter';
+import { Validator } from '../utils/Validator';
 
 export interface BackendAskResponse {
     answer: string;
@@ -40,11 +40,12 @@ export class BackendClient {
                 room_id: roomId,
                 history: history || [],
             });
+            const data = this.asData(response);
 
             return {
-                answer: response.data.answer || 'No answer received.',
-                sources: response.data.sources || [],
-                model: response.data.model || 'unknown',
+                answer: (data.answer as string) || 'No answer received.',
+                sources: (data.sources as CitationSource[]) || [],
+                model: (data.model as string) || 'unknown',
             };
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
@@ -55,14 +56,19 @@ export class BackendClient {
     public async search(
         query: string,
         topK: number = 5,
+        userId?: string,
+        roomId?: string,
     ): Promise<SearchResult[]> {
         try {
             const response = await this.post('/api/search', {
                 query,
                 top_k: topK,
+                user_id: userId,
+                room_id: roomId,
             });
+            const data = this.asData(response);
 
-            return response.data.results || [];
+            return (data.results as SearchResult[]) || [];
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             throw new Error(message);
@@ -72,7 +78,7 @@ export class BackendClient {
     public async summarize(text: string): Promise<string> {
         try {
             const response = await this.post('/api/summarize', { text });
-            return response.data.summary || 'No summary generated.';
+            return (this.asData(response).summary as string) || 'No summary generated.';
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             throw new Error(message);
@@ -82,7 +88,7 @@ export class BackendClient {
     public async explain(concept: string): Promise<string> {
         try {
             const response = await this.post('/api/explain', { concept });
-            return response.data.explanation || 'No explanation generated.';
+            return (this.asData(response).explanation as string) || 'No explanation generated.';
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             throw new Error(message);
@@ -97,7 +103,13 @@ export class BackendClient {
     }>> {
         try {
             const response = await this.get('/api/documents');
-            return response.data.documents || [];
+            const data = this.asData(response);
+            return (data.documents as Array<{
+                id: string;
+                filename: string;
+                chunks_count: number;
+                created_at?: string;
+            }>) || [];
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             throw new Error(message);
@@ -113,22 +125,32 @@ export class BackendClient {
                 text,
                 target_lang: targetLang,
             });
-            return response.data.translation || 'No translation generated.';
+            return (this.asData(response).translation as string) || 'No translation generated.';
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             throw new Error(message);
         }
     }
 
+    /**
+     * Coerce a response body to a plain object, defaulting to ``{}`` when the
+     * backend returns no JSON body. Prevents ``response.data.X`` from throwing
+     * a TypeError on an empty/undefined payload.
+     */
+    private asData(response: IHttpResponse): Record<string, unknown> {
+        const data = response.data;
+        return data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+    }
+
     private async getBackendUrl(): Promise<string> {
         const settings = this.read.getEnvironmentReader().getSettings();
         const url = await settings.getValueById('backend-url');
 
-        if (!url || typeof url !== 'string') {
+        if (!url || typeof url !== 'string' || !Validator.isValidUrl(url.trim())) {
             throw new Error(ERRORS.SETTING_NOT_CONFIGURED('backend-url'));
         }
 
-        return url.replace(/\/+$/, '');
+        return url.trim().replace(/\/+$/, '');
     }
 
     private async getApiKey(): Promise<string> {
@@ -147,10 +169,7 @@ export class BackendClient {
             timeout: 60000,
         });
 
-        if (response.statusCode >= 400) {
-            throw new Error(ERRORS.BACKEND_ERROR(response.statusCode));
-        }
-
+        this.assertSuccess(response);
         return response;
     }
 
@@ -160,11 +179,19 @@ export class BackendClient {
             timeout: 60000,
         });
 
-        if (response.statusCode >= 400) {
+        this.assertSuccess(response);
+        return response;
+    }
+
+    /**
+     * Treat any non-2xx status as an error. Previously only >=400 was rejected,
+     * so a 3xx redirect (whose body is HTML/empty) passed through and was then
+     * parsed as JSON — producing confusing downstream failures.
+     */
+    private assertSuccess(response: IHttpResponse): void {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
             throw new Error(ERRORS.BACKEND_ERROR(response.statusCode));
         }
-
-        return response;
     }
 
     private async buildHeaders(): Promise<Record<string, string>> {

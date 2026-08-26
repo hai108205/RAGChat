@@ -67,21 +67,19 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     container_name: ragchat-backend
+    env_file:
+      - ../.env
     environment:
+      # Host-name overrides only — the ../.env (env_file) provides the LLM,
+      # storage, and auth settings below. Do NOT redeclare those here:
+      # `environment` overrides `env_file`, so an interpolated empty value
+      # (no OPENAI_API_KEY in compose's scope) would clobber the .env value.
       DATABASE_URL: postgresql://ragchat:ragchat@postgres:5432/ragchat
       REDIS_URL: redis://redis:6379/0
-      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      MODEL: ${MODEL:-gpt-4o}
       UPLOAD_DIR: /data/uploads
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
-      USE_MINIO: ${USE_MINIO:-false}
-      USE_ASYNC_INDEXING: ${USE_ASYNC_INDEXING:-false}
-      API_KEY: ${API_KEY:-}
-      APP_CALLBACK_URL: ${APP_CALLBACK_URL:-}
     ports:
       - "8000:8000"
     volumes:
@@ -104,11 +102,11 @@ services:
       dockerfile: Dockerfile
     container_name: ragchat-worker
     command: arq src.taskqueue.WorkerSettings --max-jobs 10
+    env_file:
+      - ../.env
     environment:
       DATABASE_URL: postgresql://ragchat:ragchat@postgres:5432/ragchat
       REDIS_URL: redis://redis:6379/0
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       UPLOAD_DIR: /data/uploads
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: minioadmin
@@ -163,10 +161,55 @@ services:
       - prometheus
     restart: unless-stopped
 
+  # ──────────────────────────────────────────────────
+  # MongoDB — Rocket.Chat primary database
+  # ──────────────────────────────────────────────────
+  mongo:
+    image: mongo:5
+    container_name: ragchat-mongo
+    command: mongod --replSet rs0
+    volumes:
+      - mongodata:/data/db
+    # Rocket.Chat realtime depends on MongoDB Change Streams, which require a
+    # replica set (oplog). Healthcheck bootstraps a single-node replset if none
+    # exists yet, so the stack comes up healthy without manual `rs.initiate()`.
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try{rs.status()}catch(e){rs.initiate()&&print('replset initialized')}"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────
+  # Rocket.Chat — app host (the `src/` TypeScript app deploys here)
+  # ──────────────────────────────────────────────────
+  rocketchat:
+    image: rocketchat/rocket.chat:6.13.0
+    container_name: ragchat-rocketchat
+    environment:
+      MONGO_URL: mongodb://mongo:27017/rocketchat
+      ROOT_URL: http://localhost:3001
+      PORT: 3000
+      DEPLOY_METHOD: docker
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - "3001:3000"
+    restart: unless-stopped
+
 volumes:
   pgdata:
+    name: ragchat-pgdata
   redisdata:
+    name: ragchat-redisdata
   miniodata:
+    name: ragchat-miniodata
   uploads:
+    name: ragchat-uploads
   prometheusdata:
+    name: ragchat-prometheusdata
   grafana-data:
+    name: ragchat-grafana-data
+  mongodata:
+    name: ragchat-mongodata

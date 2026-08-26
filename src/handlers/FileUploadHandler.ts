@@ -6,6 +6,7 @@ import {
 } from '@rocket.chat/apps-engine/definition/accessors';
 import { IPreFileUpload, IFileUploadContext } from '@rocket.chat/apps-engine/definition/uploads';
 import { BackendClient } from '../lib/BackendClient';
+import { sendMessage } from '../utils/MessageHelper';
 
 const SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.pptx', '.csv', '.xlsx', '.html'];
 
@@ -22,7 +23,7 @@ export class FileUploadHandler implements IPreFileUpload {
         read: IRead,
         http: IHttp,
         _persis: IPersistence,
-        _modify: IModify,
+        modify: IModify,
     ): Promise<void> {
         const { file, content } = context;
 
@@ -40,9 +41,21 @@ export class FileUploadHandler implements IPreFileUpload {
                 user_id: file.userId || '',
                 room_id: file.rid || '',
             });
-        } catch {
-            // Never block the upload — indexing failures are reported
-            // through the backend callback when available.
+        } catch (error: unknown) {
+            // Never block the upload itself, but surface the failure — a silent
+            // empty catch left users with no feedback when the backend was
+            // unreachable (and no callback would ever arrive).
+            const message = error instanceof Error ? error.message : 'Indexing request failed';
+            const room = await read.getRoomReader().getById(file.rid);
+            if (!room) {
+                return;
+            }
+            await sendMessage(
+                read,
+                modify,
+                room,
+                `⚠️ Could not queue **\`${file.name}\`** for indexing: ${message}`,
+            );
         }
     }
 
