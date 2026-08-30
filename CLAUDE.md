@@ -182,3 +182,62 @@ rtk init --global       # Add RTK to ~/.claude/CLAUDE.md
 
 Overall average: **60-90% token reduction** on common development operations.
 <!-- /rtk-instructions -->
+
+# Agent Skills & Memory System
+
+This repository is equipped with specialized skills located in `.claude/skills/` and `.agents/skills/`.
+
+## AgentMemory Discipline
+
+- **Recall Before Starting:** Search past sessions, learnings, and decisions before beginning non-trivial tasks (`.claude/skills/recall/SKILL.md`, `.claude/skills/memory-discipline/SKILL.md`).
+- **Save at Decision Points:** Persist architectural decisions, key findings, and context to long-term memory (`.claude/skills/remember/SKILL.md`).
+- **Learn from Corrections:** When corrected or when solving tricky issues, record a lesson (`.claude/skills/lesson/SKILL.md`).
+- **Handoff & Resume:** Pick up where previous sessions left off seamlessly (`.claude/skills/handoff/SKILL.md`, `.claude/skills/session-history/SKILL.md`).
+
+## Skills Catalog
+
+### 1. Code Intelligence (GitNexus)
+
+| Skill | Path | Description |
+|---|---|---|
+| `gitnexus-exploring` | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` | Understand architecture, trace execution flows, find callers/callees. |
+| `gitnexus-impact-analysis` | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` | Blast radius analysis, check breaking changes before editing code. |
+| `gitnexus-debugging` | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` | Trace bugs, analyze root causes and error origins. |
+| `gitnexus-refactoring` | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` | Safe rename, module extraction, code refactoring. |
+| `gitnexus-guide` | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` | Tools reference, graph schema, query guides. |
+| `gitnexus-cli` | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` | Indexing, status, reanalysis, and documentation wiki commands. |
+
+### 2. Memory & Session Management (AgentMemory)
+
+| Skill | Path | Description |
+|---|---|---|
+| `recall` | `.claude/skills/recall/SKILL.md` | Hybrid search (BM25 + vector + graph) for past observations & learnings. |
+| `remember` | `.claude/skills/remember/SKILL.md` | Save insights, decisions, and knowledge to long-term storage. |
+| `lesson` | `.claude/skills/lesson/SKILL.md` | Save rules & corrections to avoid repeating mistakes. |
+| `forget` | `.claude/skills/forget/SKILL.md` | Remove specific memories/observations. |
+| `handoff` | `.claude/skills/handoff/SKILL.md` | Resume the most recent session with pending context. |
+| `recap` | `.claude/skills/recap/SKILL.md` | Summary of recent agent sessions grouped by date. |
+| `session-history` | `.claude/skills/session-history/SKILL.md` | Timeline overview of previous agent sessions. |
+| `memory-discipline` | `.claude/skills/memory-discipline/SKILL.md` | Standard session loop for memory persistence and recall. |
+| `commit-context` | `.claude/skills/commit-context/SKILL.md` | Trace code back to the agent session that committed it. |
+| `commit-history` | `.claude/skills/commit-history/SKILL.md` | List recent git commits linked to agent sessions. |
+
+### 3. AgentMemory Architecture & Configuration
+
+| Skill | Path | Description |
+|---|---|---|
+| `agentmemory-agents` | `.claude/skills/agentmemory-agents/SKILL.md` | Wire agentmemory into host coding agents via connect. |
+| `agentmemory-architecture` | `.claude/skills/agentmemory-architecture/SKILL.md` | Architecture, iii engine, storage model, and viewer. |
+| `agentmemory-config` | `.claude/skills/agentmemory-config/SKILL.md` | Configuration, environment variables, ports, and flags. |
+| `agentmemory-hooks` | `.claude/skills/agentmemory-hooks/SKILL.md` | Lifecycle hooks for capturing observations automatically. |
+| `agentmemory-mcp-tools` | `.claude/skills/agentmemory-mcp-tools/SKILL.md` | Complete MCP tools map and arguments reference. |
+| `agentmemory-rest-api` | `.claude/skills/agentmemory-rest-api/SKILL.md` | HTTP REST API surface for memory operations. |
+| `write-agentmemory-skill` | `.claude/skills/write-agentmemory-skill/SKILL.md` | House format and rules for writing/updating skills. |
+
+### 4. CLI Token Optimization (RTK)
+
+| Skill | Path | Description |
+|---|---|---|
+| `rtk` | `.claude/skills/rtk/SKILL.md` | Token-optimized CLI command wrapper (60-90% token reduction on test, build, git, search). |
+
+
