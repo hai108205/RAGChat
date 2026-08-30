@@ -70,10 +70,6 @@ services:
     env_file:
       - ../.env
     environment:
-      # Host-name overrides only — the ../.env (env_file) provides the LLM,
-      # storage, and auth settings below. Do NOT redeclare those here:
-      # `environment` overrides `env_file`, so an interpolated empty value
-      # (no OPENAI_API_KEY in compose's scope) would clobber the .env value.
       DATABASE_URL: postgresql://ragchat:ragchat@postgres:5432/ragchat
       REDIS_URL: redis://redis:6379/0
       UPLOAD_DIR: /data/uploads
@@ -101,7 +97,7 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     container_name: ragchat-worker
-    command: arq src.taskqueue.WorkerSettings --max-jobs 10
+    command: arq src.taskqueue.WorkerSettings
     env_file:
       - ../.env
     environment:
@@ -119,8 +115,6 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    profiles:
-      - async  # Only start with: docker compose --profile async up
 
   # ──────────────────────────────────────────────────
   # Prometheus — metrics collection
@@ -170,15 +164,29 @@ services:
     command: mongod --replSet rs0
     volumes:
       - mongodata:/data/db
-    # Rocket.Chat realtime depends on MongoDB Change Streams, which require a
-    # replica set (oplog). Healthcheck bootstraps a single-node replset if none
-    # exists yet, so the stack comes up healthy without manual `rs.initiate()`.
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "try{rs.status()}catch(e){rs.initiate()&&print('replset initialized')}"]
-      interval: 5s
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
       timeout: 5s
-      retries: 60
+      retries: 30
+      start_period: 60s
     restart: unless-stopped
+
+  # ──────────────────────────────────────────────────
+  # Mongo Init — one-shot replica set bootstrap
+  # Runs after mongo is healthy, bootstraps rs0 via shell script, waits for
+  # primary election, then exits cleanly. Keeps mongo's default entrypoint intact.
+  # ──────────────────────────────────────────────────
+  mongo-init:
+    image: mongo:5
+    container_name: ragchat-mongo-init
+    command: ["/bin/bash", "/bootstrap-replset.sh"]
+    volumes:
+      - ./init/bootstrap-replset.sh:/bootstrap-replset.sh:ro
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
 
   # ──────────────────────────────────────────────────
   # Rocket.Chat — app host (the `src/` TypeScript app deploys here)
@@ -187,13 +195,19 @@ services:
     image: rocketchat/rocket.chat:6.13.0
     container_name: ragchat-rocketchat
     environment:
-      MONGO_URL: mongodb://mongo:27017/rocketchat
+      MONGO_URL: mongodb://mongo:27017/rocketchat?replicaSet=rs0
       ROOT_URL: http://localhost:3001
       PORT: 3000
       DEPLOY_METHOD: docker
+      MONGO_OPLOG_URL: mongodb://mongo:27017/local?replicaSet=rs0
+      OVERWRITE_SETTING_Show_Setup_Wizard: "completed"
+    volumes:
+      - rocketchat-uploads:/app/uploads
     depends_on:
       mongo:
         condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
     ports:
       - "3001:3000"
     restart: unless-stopped
@@ -207,6 +221,8 @@ volumes:
     name: ragchat-miniodata
   uploads:
     name: ragchat-uploads
+  rocketchat-uploads:
+    name: ragchat-rocketchat-uploads
   prometheusdata:
     name: ragchat-prometheusdata
   grafana-data:

@@ -1,4 +1,4 @@
-FROM rocketchat/rocket.chat:latest
+FROM rocketchat/rocket.chat:6.13.0
 
 # Rocket.Chat Apps Engine requires the app to be installed
 # at runtime via the Admin UI or API. This Dockerfile extends
