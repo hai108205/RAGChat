@@ -37,7 +37,20 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
         const logger = new Logger(this.app.getLogger(), 'CallbackEndpoint');
         const body = request.content as Record<string, unknown>;
 
-        logger.info('Received callback', body);
+        // Reject unauthenticated callers: this endpoint is UNSECURE (no app-
+        // engine auth), so it must validate the shared api-key itself. The
+        // backend sends `Authorization: Bearer <api_key>`. When no api-key is
+        // configured on either side, auth is disabled (open dev mode) — matching
+        // the backend's own /api/* behaviour.
+        if (!(await this.authorize(request, read))) {
+            logger.warn('Rejected unauthenticated callback');
+            return {
+                status: 401,
+                content: { error: 'Unauthorized' },
+            };
+        }
+
+        logger.info('Received callback', { event: body.event, room_id: body.room_id });
 
         const event = body.event as string | undefined;
         const userId = body.user_id as string | undefined;
@@ -83,12 +96,6 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                     break;
                 }
 
-                case 'summary_complete': {
-                    const summary = message || 'No summary available.';
-                    await sendMessage(read, modify, room, summary);
-                    break;
-                }
-
                 default: {
                     if (message) {
                         await sendMessage(read, modify, room, message);
@@ -124,5 +131,25 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
             status: 200,
             content: { status: 'RAGChat Callback Endpoint' },
         };
+    }
+
+    /**
+     * Validate the callback's Bearer token against the app's `api-key` setting.
+     *
+     * Returns true when the token matches. When no api-key is configured, auth
+     * is disabled (open dev mode) to mirror the backend's own `/api/*` contract.
+     */
+    private async authorize(request: IApiRequest, read: IRead): Promise<boolean> {
+        const settings = read.getEnvironmentReader().getSettings();
+        const expectedKey = await settings.getValueById('api-key');
+        const configured = typeof expectedKey === 'string' && expectedKey.length > 0;
+
+        if (!configured) {
+            return true;
+        }
+
+        const headers = request.headers || {};
+        const authHeader = headers['Authorization'] ?? headers['authorization'];
+        return typeof authHeader === 'string' && authHeader === `Bearer ${expectedKey}`;
     }
 }

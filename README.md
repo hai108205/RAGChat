@@ -59,51 +59,82 @@ docker/                    docker-compose stack, Dockerfiles, Prometheus/Grafana
 - Docker (optional, for the full stack)
 - OpenAI API key (or Anthropic API key)
 
-## Backend setup
+## Running the project
+
+### 1. Configuration (single source: root `.env`)
+
+**One `.env` at the project root drives everything** — the local backend and Docker Compose read the same file. Copy the template and fill in your secrets:
 
 ```bash
-cd backend
-pip install -e ".[dev]"
-
-# Copy environment variables (see backend/src/config.py for all settings)
-export OPENAI_API_KEY=your-key
-export DATABASE_URL=postgresql://ragchat:ragchat@localhost:5432/ragchat
+cp .env.example .env   # then edit: OPENAI_API_KEY (or ANTHROPIC_API_KEY + LLM_PROVIDER=claude)
 ```
 
-Create the registry tables:
+The backend resolves this root `.env` automatically (pydantic-settings + `find_dotenv`, walking up from `backend/`); in Docker the values are injected by compose. See `.env.example` for the full list (secret, runtime, monitoring and tuning variables).
 
-```bash
-make migrate
-```
-
-Start the API server:
-
-```bash
-make start          # uvicorn src.main:app on :8000
-```
-
-Start the ARQ worker (optional, for async indexing):
-
-```bash
-make start-worker   # arq src.taskqueue.WorkerSettings
-```
-
-### Backend configuration
-
-All settings are read from environment variables (`backend/src/config.py`, pydantic-settings). Key ones:
+Key variables (defaults are in `backend/src/config.py`; beyond these, see `.env.example`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OPENAI_API_KEY` | — | OpenAI key (embedding + LLM) |
 | `ANTHROPIC_API_KEY` | — | Anthropic key (Claude LLM) |
 | `LLM_PROVIDER` | `openai` | `openai` or `claude` |
-| `DATABASE_URL` | `postgresql://ragchat:ragchat@localhost:5432/ragchat` | pgVector DB |
-| `REDIS_URL` | `redis://localhost:6379/0` | Queue / chat history |
+| `MODEL` | `gpt-4o` | LLM model name |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
+| `USE_MINIO` | `false` | Store uploads in MinIO |
 | `USE_ASYNC_INDEXING` | `false` | Use ARQ background jobs |
 | `API_KEY` | `""` | Bearer token required on `/api/*` (empty = open) |
 | `APP_CALLBACK_URL` | `""` | Rocket.Chat webhook for job notifications |
-| `USE_MINIO` | `false` | Store uploads in MinIO |
 | `SIMILARITY_THRESHOLD` | `0.3` | Retrieval relevance cutoff |
+
+Then pick either **A: Docker** (recommended, full stack) or **B: local backend**.
+
+### A. Full stack with Docker Compose (recommended)
+
+Starts Postgres+pgVector, Redis, MinIO, the FastAPI backend (and Opt-in worker, Prometheus, Grafana):
+
+```bash
+make docker-up            # or: docker compose -f docker/docker-compose.yml up -d
+make docker-logs          # tail logs
+make docker-down          # stop the stack
+```
+
+Services (`docker/docker-compose.yml`):
+
+| Service | Purpose |
+|---------|---------|
+| `postgres` | pgVector vector database |
+| `redis` | Queue + chat history cache |
+| `minio` | Object storage for uploads (optional) |
+| `backend` | FastAPI RAG API on `:8000` |
+| `worker` | ARQ background indexing worker (opt-in: `--profile async`) |
+| `prometheus` | Metrics collection |
+| `grafana` | Dashboards |
+
+### B. Local backend (needs Postgres + Redis running)
+
+```bash
+# 1. Start the infra containers only (Postgres+pgVector, Redis)
+docker compose -f docker/docker-compose.yml up -d postgres redis
+
+# 2. Install backend deps
+cd backend
+pip install -e ".[dev]"
+
+# 3. Create the registry tables
+make migrate
+
+# 4. Start the API server (uvicorn on :8000)
+make start
+
+# (optional) 5. ARQ worker for async indexing
+make start-worker
+```
+
+### Verify it's up
+
+```bash
+curl http://localhost:8000/health      # expect {"status":"ok"} or similar
+```
 
 ## Rocket.Chat App setup
 
@@ -125,32 +156,6 @@ Then configure the app settings (Admin → Apps → RAGChat → Settings):
 - **Backend URL** — e.g. `http://localhost:8000`
 - **API Key** — must match the backend `API_KEY` if set
 - **LLM Model / Embedding Model** — model selection
-
-## Run the full stack with Docker Compose
-
-```bash
-cp .env.example .env   # or set environment variables
-make docker-up
-```
-
-Services started (`docker/docker-compose.yml`):
-
-| Service | Purpose |
-|---------|---------|
-| `postgres` | pgVector vector database |
-| `redis` | Queue + chat history cache |
-| `minio` | Object storage for uploads (optional) |
-| `backend` | FastAPI RAG API on `:8000` |
-| `worker` | ARQ background indexing worker |
-| `prometheus` | Metrics collection |
-| `grafana` | Dashboards |
-
-Useful commands:
-
-```bash
-make docker-logs   # tail logs
-make docker-down   # stop the stack
-```
 
 ## Development
 

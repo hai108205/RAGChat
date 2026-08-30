@@ -116,9 +116,9 @@ class VectorStore:
         vec = "[" + ",".join(f"{v:.10f}" for v in query_embedding) + "]"
 
         sql = (
-            "SELECT cmetadata, document, (1 - embedding <=> :vec::vector) AS similarity "
+            "SELECT cmetadata, document, (1 - embedding <=> CAST(:vec AS vector)) AS similarity "
             "FROM langchain_pg_embedding "
-            "WHERE (1 - embedding <=> :vec::vector) >= :threshold"
+            "WHERE (1 - embedding <=> CAST(:vec AS vector)) >= :threshold"
         )
         if where:
             sql += where

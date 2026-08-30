@@ -18,7 +18,7 @@ class FakeVectorStore:
     def __init__(self, results):
         self.results = results
 
-    async def search(self, embedding, top_k=5):
+    async def search(self, embedding, top_k=5, **kwargs):
         return self.results[:top_k]
 
 

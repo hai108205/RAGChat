@@ -67,21 +67,15 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     container_name: ragchat-backend
+    env_file:
+      - ../.env
     environment:
       DATABASE_URL: postgresql://ragchat:ragchat@postgres:5432/ragchat
       REDIS_URL: redis://redis:6379/0
-      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      MODEL: ${MODEL:-gpt-4o}
       UPLOAD_DIR: /data/uploads
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
-      USE_MINIO: ${USE_MINIO:-false}
-      USE_ASYNC_INDEXING: ${USE_ASYNC_INDEXING:-false}
-      API_KEY: ${API_KEY:-}
-      APP_CALLBACK_URL: ${APP_CALLBACK_URL:-}
     ports:
       - "8000:8000"
     volumes:
@@ -103,12 +97,12 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     container_name: ragchat-worker
-    command: arq src.taskqueue.WorkerSettings --max-jobs 10
+    command: arq src.taskqueue.WorkerSettings
+    env_file:
+      - ../.env
     environment:
       DATABASE_URL: postgresql://ragchat:ragchat@postgres:5432/ragchat
       REDIS_URL: redis://redis:6379/0
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       UPLOAD_DIR: /data/uploads
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: minioadmin
@@ -121,8 +115,6 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    profiles:
-      - async  # Only start with: docker compose --profile async up
 
   # ──────────────────────────────────────────────────
   # Prometheus — metrics collection
@@ -163,10 +155,77 @@ services:
       - prometheus
     restart: unless-stopped
 
+  # ──────────────────────────────────────────────────
+  # MongoDB — Rocket.Chat primary database
+  # ──────────────────────────────────────────────────
+  mongo:
+    image: mongo:5
+    container_name: ragchat-mongo
+    command: mongod --replSet rs0
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────
+  # Mongo Init — one-shot replica set bootstrap
+  # Runs after mongo is healthy, bootstraps rs0 via shell script, waits for
+  # primary election, then exits cleanly. Keeps mongo's default entrypoint intact.
+  # ──────────────────────────────────────────────────
+  mongo-init:
+    image: mongo:5
+    container_name: ragchat-mongo-init
+    command: ["/bin/bash", "/bootstrap-replset.sh"]
+    volumes:
+      - ./init/bootstrap-replset.sh:/bootstrap-replset.sh:ro
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+
+  # ──────────────────────────────────────────────────
+  # Rocket.Chat — app host (the `src/` TypeScript app deploys here)
+  # ──────────────────────────────────────────────────
+  rocketchat:
+    image: rocketchat/rocket.chat:6.13.0
+    container_name: ragchat-rocketchat
+    environment:
+      MONGO_URL: mongodb://mongo:27017/rocketchat?replicaSet=rs0
+      ROOT_URL: http://localhost:3001
+      PORT: 3000
+      DEPLOY_METHOD: docker
+      MONGO_OPLOG_URL: mongodb://mongo:27017/local?replicaSet=rs0
+      OVERWRITE_SETTING_Show_Setup_Wizard: "completed"
+    volumes:
+      - rocketchat-uploads:/app/uploads
+    depends_on:
+      mongo:
+        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
+    ports:
+      - "3001:3000"
+    restart: unless-stopped
+
 volumes:
   pgdata:
+    name: ragchat-pgdata
   redisdata:
+    name: ragchat-redisdata
   miniodata:
+    name: ragchat-miniodata
   uploads:
+    name: ragchat-uploads
+  rocketchat-uploads:
+    name: ragchat-rocketchat-uploads
   prometheusdata:
+    name: ragchat-prometheusdata
   grafana-data:
+    name: ragchat-grafana-data
+  mongodata:
+    name: ragchat-mongodata

@@ -29,9 +29,30 @@ import { FileUploadHandler } from './src/handlers/FileUploadHandler';
 import { CallbackEndpoint } from './src/api/CallbackEndpoint';
 
 export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessageSent, IPreFileUpload {
-    private readonly botHandler = new BotMessageHandler();
-    private readonly mentionHandler = new MentionHandler();
-    private readonly uploadHandler = new FileUploadHandler();
+    private botHandler: BotMessageHandler | null = null;
+    private mentionHandler: MentionHandler | null = null;
+    private uploadHandler: FileUploadHandler | null = null;
+
+    private getBotHandler(): BotMessageHandler {
+        if (!this.botHandler) {
+            this.botHandler = new BotMessageHandler();
+        }
+        return this.botHandler;
+    }
+
+    private getMentionHandler(): MentionHandler {
+        if (!this.mentionHandler) {
+            this.mentionHandler = new MentionHandler();
+        }
+        return this.mentionHandler;
+    }
+
+    private getUploadHandler(): FileUploadHandler {
+        if (!this.uploadHandler) {
+            this.uploadHandler = new FileUploadHandler();
+        }
+        return this.uploadHandler;
+    }
 
     constructor(info: IAppInfo, logger: ILogger, accessors: IAppAccessors) {
         super(info, logger, accessors);
@@ -91,7 +112,7 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
         persistence: IPersistence,
         modify: IModify,
     ): Promise<void> {
-        await this.botHandler.executePostMessageSentToBot(message, read, http, persistence, modify);
+        await this.getBotHandler().executePostMessageSentToBot(message, read, http, persistence, modify);
     }
 
     // --- IPostMessageSent: channel @mentions ---
@@ -101,7 +122,7 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
         read: IRead,
         _http: IHttp,
     ): Promise<boolean> {
-        return this.mentionHandler.checkPostMessageSent(message, read);
+        return this.getMentionHandler().checkPostMessageSent(message, read);
     }
 
     public async executePostMessageSent(
@@ -111,7 +132,7 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
         persistence: IPersistence,
         modify: IModify,
     ): Promise<void> {
-        await this.mentionHandler.executePostMessageSent(message, read, http, persistence, modify);
+        await this.getMentionHandler().executePostMessageSent(message, read, http, persistence, modify);
     }
 
     // --- IPreFileUpload: forward documents to RAG backend ---
@@ -123,6 +144,6 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
         persis: IPersistence,
         modify: IModify,
     ): Promise<void> {
-        await this.uploadHandler.executePreFileUpload(context, read, http, persis, modify);
+        await this.getUploadHandler().executePreFileUpload(context, read, http, persis, modify);
     }
 }
