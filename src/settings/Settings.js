@@ -11,8 +11,8 @@ async function registerSettings(configuration) {
             public: false,
             i18nLabel: 'Backend URL',
             i18nDescription: 'URL of the Python RAG backend service',
-            i18nPlaceholder: 'http://localhost:8000',
-            packageValue: 'http://localhost:8000',
+            i18nPlaceholder: 'http://backend:8000',
+            packageValue: 'http://backend:8000',
         }),
         configuration.settings.provideSetting({
             id: 'api-key',

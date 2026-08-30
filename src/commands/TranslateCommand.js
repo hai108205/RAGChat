@@ -45,15 +45,27 @@ class TranslateCommand {
             await this.sendUsage(read, modify, room, threadId);
             return;
         }
+        const placeholderId = await (0, MessageHelper_1.sendPlaceholderMessage)(read, modify, room, '🔍 _Đang dịch văn bản..._', threadId);
         try {
             const client = new BackendClient_1.BackendClient(http, read);
             const translation = await client.translate(text, targetLang);
             const langName = SUPPORTED_LANGS[targetLang] || targetLang;
-            await (0, MessageHelper_1.sendMessage)(read, modify, room, `**${langName}:**\n\n${translation}`, undefined, threadId);
+            const answer = `**${langName}:**\n\n${translation}`;
+            if (placeholderId) {
+                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, answer);
+            }
+            else {
+                await (0, MessageHelper_1.sendMessage)(read, modify, room, answer, undefined, threadId);
+            }
         }
         catch (error) {
             const message = error instanceof Error ? error.message : Errors_1.ERRORS.BACKEND_UNAVAILABLE;
-            await (0, MessageHelper_1.sendMessage)(read, modify, room, message, undefined, threadId);
+            if (placeholderId) {
+                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, message);
+            }
+            else {
+                await (0, MessageHelper_1.sendMessage)(read, modify, room, message, undefined, threadId);
+            }
         }
     }
     async sendUsage(read, modify, room, threadId) {

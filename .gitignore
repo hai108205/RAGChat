@@ -3,6 +3,8 @@ node_modules/
 
 # rc-apps package output
 dist/
+.rcappsconfig
+.rcappsconfig.json
 
 # Python
 __pycache__/

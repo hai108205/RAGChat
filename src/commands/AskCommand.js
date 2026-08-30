@@ -25,6 +25,7 @@ class AskCommand {
             return;
         }
         const query = args.join(' ');
+        const placeholderId = await (0, MessageHelper_1.sendPlaceholderMessage)(read, modify, room, '🔍 _Đang tra cứu tài liệu và suy nghĩ câu trả lời..._', threadId);
         try {
             const client = new BackendClient_1.BackendClient(http, read);
             const sessionStore = new sessionStore_1.SessionStore(read, persis);
@@ -40,11 +41,21 @@ class AskCommand {
             const attachment = enableCitations
                 ? Formatter_1.Formatter.formatSources(response.sources)
                 : undefined;
-            await (0, MessageHelper_1.sendMessage)(read, modify, room, response.answer, attachment, threadId);
+            if (placeholderId) {
+                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, response.answer, attachment);
+            }
+            else {
+                await (0, MessageHelper_1.sendMessage)(read, modify, room, response.answer, attachment, threadId);
+            }
         }
         catch (error) {
             const message = error instanceof Error ? error.message : Errors_1.ERRORS.BACKEND_UNAVAILABLE;
-            await (0, MessageHelper_1.sendMessage)(read, modify, room, message);
+            if (placeholderId) {
+                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, message, undefined);
+            }
+            else {
+                await (0, MessageHelper_1.sendMessage)(read, modify, room, message);
+            }
         }
     }
 }

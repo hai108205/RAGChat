@@ -38,6 +38,7 @@ class MentionHandler {
             await (0, MessageHelper_1.sendMessage)(read, modify, message.room, Formatter_1.Formatter.formatHelpMessage(), undefined, message.threadId);
             return;
         }
+        const placeholderId = await (0, MessageHelper_1.sendPlaceholderMessage)(read, modify, message.room, '🔍 _Đang tra cứu tài liệu và suy nghĩ câu trả lời..._', message.threadId);
         try {
             const client = new BackendClient_1.BackendClient(http, read);
             const sessionStore = new sessionStore_1.SessionStore(read, persistence);
@@ -53,11 +54,21 @@ class MentionHandler {
             const attachment = enableCitations
                 ? Formatter_1.Formatter.formatSources(response.sources)
                 : undefined;
-            await (0, MessageHelper_1.sendMessage)(read, modify, message.room, response.answer, attachment, message.threadId);
+            if (placeholderId) {
+                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, response.answer, attachment);
+            }
+            else {
+                await (0, MessageHelper_1.sendMessage)(read, modify, message.room, response.answer, attachment, message.threadId);
+            }
         }
         catch (error) {
             const errMsg = error instanceof Error ? error.message : Errors_1.ERRORS.BACKEND_UNAVAILABLE;
-            await (0, MessageHelper_1.sendMessage)(read, modify, message.room, errMsg, undefined, message.threadId);
+            if (placeholderId) {
+                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, errMsg, undefined);
+            }
+            else {
+                await (0, MessageHelper_1.sendMessage)(read, modify, message.room, errMsg, undefined, message.threadId);
+            }
         }
     }
     async runCommand(command, message, read, http, persistence, modify) {
@@ -112,18 +123,17 @@ class MentionHandler {
     }
     isMentioned(text, botUsername) {
         const trimmed = text.trim();
-        const mention = new RegExp(`@${this.escapeRegExp(botUsername)}(?=$|[\\s,.;:'"!?])`, 'i');
-        const command = new RegExp(`^${this.escapeRegExp(Commands_1.BOT_PREFIX)}(?=$|[\\s])`, 'i');
-        return mention.test(trimmed) || command.test(trimmed);
+        const botMention = new RegExp(`@${this.escapeRegExp(botUsername)}(?=$|[\\s,.;:'"!?])`, 'i');
+        const prefixMention = new RegExp(`(^|\\s)${this.escapeRegExp(Commands_1.BOT_PREFIX)}(?=$|[\\s,.;:'"!?])`, 'i');
+        return botMention.test(trimmed) || prefixMention.test(trimmed);
     }
     stripMention(text, botUsername) {
-        const mention = new RegExp(`@${this.escapeRegExp(botUsername)}(?=$|[\\s,.;:'"!?])`, 'gi');
-        let stripped = text.replace(mention, '');
-        const command = new RegExp(`^${this.escapeRegExp(Commands_1.BOT_PREFIX)}(?=$|[\\s])`, 'i');
-        if (command.test(stripped.trim())) {
-            stripped = stripped.trim().replace(command, '');
-        }
-        return stripped;
+        const botMention = new RegExp(`@${this.escapeRegExp(botUsername)}(?=$|[\\s,.;:'"!?])`, 'gi');
+        const prefixMention = new RegExp(`(^|\\s)${this.escapeRegExp(Commands_1.BOT_PREFIX)}(?=$|[\\s,.;:'"!?])`, 'gi');
+        return text
+            .replace(botMention, '')
+            .replace(prefixMention, '')
+            .trim();
     }
     escapeRegExp(value) {
         return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

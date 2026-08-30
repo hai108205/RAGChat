@@ -73,6 +73,7 @@ class BotMessageHandler {
         }
     }
     async handleQuestion(text, message, read, http, persistence, modify) {
+        const placeholderId = await (0, MessageHelper_1.sendPlaceholderMessage)(read, modify, message.room, '🔍 _Đang tra cứu tài liệu và suy nghĩ câu trả lời..._', message.threadId);
         try {
             const client = new BackendClient_1.BackendClient(http, read);
             const sessionStore = new sessionStore_1.SessionStore(read, persistence);
@@ -88,11 +89,21 @@ class BotMessageHandler {
             const attachment = enableCitations
                 ? Formatter_1.Formatter.formatSources(response.sources)
                 : undefined;
-            await (0, MessageHelper_1.sendMessage)(read, modify, message.room, response.answer, attachment, message.threadId);
+            if (placeholderId) {
+                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, response.answer, attachment);
+            }
+            else {
+                await (0, MessageHelper_1.sendMessage)(read, modify, message.room, response.answer, attachment, message.threadId);
+            }
         }
         catch (error) {
             const errMsg = error instanceof Error ? error.message : Errors_1.ERRORS.BACKEND_UNAVAILABLE;
-            await (0, MessageHelper_1.sendMessage)(read, modify, message.room, errMsg, undefined, message.threadId);
+            if (placeholderId) {
+                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, errMsg, undefined);
+            }
+            else {
+                await (0, MessageHelper_1.sendMessage)(read, modify, message.room, errMsg, undefined, message.threadId);
+            }
         }
     }
 }

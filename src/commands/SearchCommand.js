@@ -23,6 +23,7 @@ class SearchCommand {
             return;
         }
         const query = args.join(' ');
+        const placeholderId = await (0, MessageHelper_1.sendPlaceholderMessage)(read, modify, room, '🔍 _Đang tìm kiếm tài liệu..._', threadId);
         try {
             const client = new BackendClient_1.BackendClient(http, read);
             const results = await client.search(query, 5, sender.id, room.id);
@@ -32,11 +33,22 @@ class SearchCommand {
                 relevance: r.relevance,
             }));
             const attachment = Formatter_1.Formatter.formatSources(sources);
-            await (0, MessageHelper_1.sendMessage)(read, modify, room, `Search results for: **${query}**`, attachment, threadId);
+            const answer = `Search results for: **${query}**`;
+            if (placeholderId) {
+                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, answer, attachment);
+            }
+            else {
+                await (0, MessageHelper_1.sendMessage)(read, modify, room, answer, attachment, threadId);
+            }
         }
         catch (error) {
             const message = error instanceof Error ? error.message : Errors_1.ERRORS.BACKEND_UNAVAILABLE;
-            await (0, MessageHelper_1.sendMessage)(read, modify, room, message, undefined, threadId);
+            if (placeholderId) {
+                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, message);
+            }
+            else {
+                await (0, MessageHelper_1.sendMessage)(read, modify, room, message, undefined, threadId);
+            }
         }
     }
 }
