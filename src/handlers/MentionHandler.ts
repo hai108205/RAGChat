@@ -11,15 +11,26 @@ import { BackendClient } from '../lib/BackendClient';
 import { SessionStore } from '../persistence/sessionStore';
 import { Formatter } from '../utils/Formatter';
 import { sendMessage, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
-import { readBoolean, readMaxHistory } from '../utils/SettingReader';
+import { readMaxHistory } from '../utils/SettingReader';
 import { ERRORS } from '../constants/Errors';
 import { BOT_PREFIX, BOT_SUB_COMMANDS } from '../constants/Commands';
 
 /**
- * Handles @mentions of the bot in channels and groups.
- * DMs are handled by BotMessageHandler (IPostMessageSentToBot).
+ * Handles @mentions of the bot in public and private channels / discussions.
+ * Direct messages (DMs) are handled separately by `BotMessageHandler` (IPostMessageSentToBot).
+ *
+ * Implements `IPostMessageSent`.
+ *
+ * Capabilities:
+ * - Two-phase gate execution (`checkPostMessageSent` -> `executePostMessageSent`)
+ * - Mentions filtering: `@bot username` or prefix `@ai`
+ * - Sub-command execution in channels (`@ai clear`, `@ai stats`, `@ai help`, `@ai start`)
+ * - RAG Q&A with async background worker dispatch and citation attachment updates
  */
 export class MentionHandler implements IPostMessageSent {
+    /**
+     * Gate method: Determines whether this handler should execute for the incoming message.
+     */
     public async checkPostMessageSent(
         message: IMessage,
         read: IRead,
@@ -42,6 +53,9 @@ export class MentionHandler implements IPostMessageSent {
         return this.isMentioned(message.text, appUser.username);
     }
 
+    /**
+     * Main action method executed when `checkPostMessageSent` returns true.
+     */
     public async executePostMessageSent(
         message: IMessage,
         read: IRead,
@@ -54,15 +68,14 @@ export class MentionHandler implements IPostMessageSent {
             return;
         }
 
-        // `@ai <command>` in a channel is a command, not a question. Detect it
-        // from the raw text (before mention stripping), then route so
-        // `clear`/`stats`/`help`/`start` act here exactly as they do in DMs.
+        // 1. Detect sub-commands (e.g. `@ai clear` or `@bot @ai clear`)
         const command = this.detectCommand(message.text || '', appUser.username);
         if (command) {
             await this.runCommand(command, message, read, http, persistence, modify);
             return;
         }
 
+        // 2. Strip bot mention to extract the actual user question
         const question = this.stripMention(message.text || '', appUser.username).trim();
         if (!question) {
             await sendMessage(
@@ -74,7 +87,7 @@ export class MentionHandler implements IPostMessageSent {
             return;
         }
 
-        // Instant feedback so user never sees "still loading" for 3–20s
+        // 3. Instant feedback placeholder in channel/thread
         const placeholderId = await sendPlaceholderMessage(
             read, modify, message.room,
             '🔍 _Đang tra cứu tài liệu và suy nghĩ câu trả lời..._',
@@ -89,38 +102,36 @@ export class MentionHandler implements IPostMessageSent {
             const maxHistory = readMaxHistory(await settings.getValueById('max-history'));
 
             const history = await sessionStore.getHistory(message.sender.id, message.room.id, message.threadId, maxHistory);
-            const response = await client.ask(
+            const requestId = `mention-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+            // 4. Enqueue async job to ARQ worker — results return via CallbackEndpoint
+            await client.askAsync(
                 question,
                 message.sender.id,
                 message.room.id,
+                message.threadId,
+                placeholderId,
                 history,
+                requestId,
             );
-
-            await sessionStore.addMessages(message.sender.id, message.room.id, message.threadId, [
-                { role: 'user', content: question, timestamp: Date.now() },
-                { role: 'assistant', content: response.answer, timestamp: Date.now() },
-            ], maxHistory);
-
-            const enableCitations = readBoolean(await settings.getValueById('enable-citations'));
-            const attachment = enableCitations
-                ? Formatter.formatSources(response.sources)
-                : undefined;
-
-            if (placeholderId) {
-                await updateMessage(placeholderId, read, modify, response.answer, attachment);
-            } else {
-                await sendMessage(read, modify, message.room, response.answer, attachment, message.threadId);
-            }
         } catch (error: unknown) {
+            // 5. Fallback error handling
             const errMsg = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             if (placeholderId) {
-                await updateMessage(placeholderId, read, modify, errMsg, undefined);
+                try {
+                    await updateMessage(placeholderId, read, modify, errMsg, undefined);
+                } catch {
+                    await sendMessage(read, modify, message.room, errMsg, undefined, message.threadId);
+                }
             } else {
                 await sendMessage(read, modify, message.room, errMsg, undefined, message.threadId);
             }
         }
     }
 
+    /**
+     * Executes sub-commands in channels.
+     */
     private async runCommand(
         command: string,
         message: IMessage,
@@ -167,9 +178,8 @@ export class MentionHandler implements IPostMessageSent {
     }
 
     /**
-     * Extract a bot sub-command from a raw channel message, or ``undefined``
-     * when the message is a plain question. Matches ``@ai clear`` directly and
-     * ``@bot @ai clear`` (mention followed by the command prefix).
+     * Extract a bot sub-command from a raw channel message, or `undefined`
+     * when the message is a plain question.
      */
     private detectCommand(text: string, botUsername: string): string | undefined {
         const trimmed = text.trim();
@@ -189,16 +199,19 @@ export class MentionHandler implements IPostMessageSent {
         return Object.values(BOT_SUB_COMMANDS).includes(token as any) ? token : undefined;
     }
 
+    /**
+     * Checks if the message explicitly mentions the bot username or uses the @ai prefix.
+     */
     private isMentioned(text: string, botUsername: string): boolean {
         const trimmed = text.trim();
-        // Explicit `@bot` mention — the boundary uses a lookahead so a trailing
-        // non-word character (hyphen, dot, etc.) still terminates the match.
         const botMention = new RegExp(`@${this.escapeRegExp(botUsername)}(?=$|[\\s,.;:'"!?])`, 'i');
-        // Prefix command: `@ai ...` can appear anywhere in the message now.
         const prefixMention = new RegExp(`(^|\\s)${this.escapeRegExp(BOT_PREFIX)}(?=$|[\\s,.;:'"!?])`, 'i');
         return botMention.test(trimmed) || prefixMention.test(trimmed);
     }
 
+    /**
+     * Strips bot mentions and prefixes from message text to extract the clean question.
+     */
     private stripMention(text: string, botUsername: string): string {
         const botMention = new RegExp(`@${this.escapeRegExp(botUsername)}(?=$|[\\s,.;:'"!?])`, 'gi');
         const prefixMention = new RegExp(`(^|\\s)${this.escapeRegExp(BOT_PREFIX)}(?=$|[\\s,.;:'"!?])`, 'gi');
@@ -212,3 +225,4 @@ export class MentionHandler implements IPostMessageSent {
         return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 }
+

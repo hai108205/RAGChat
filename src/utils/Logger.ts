@@ -1,5 +1,9 @@
 import { ILogger } from '@rocket.chat/apps-engine/definition/accessors';
 
+/**
+ * Scoped logging utility wrapping the Apps-Engine `ILogger`.
+ * Prefixes log output with the class/component context.
+ */
 export class Logger {
     constructor(
         private logger: ILogger,
@@ -22,3 +26,4 @@ export class Logger {
         this.logger.error(`[${this.context}] ${message}`, ...args);
     }
 }
+

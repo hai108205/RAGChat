@@ -1,10 +1,23 @@
 import { IConfigurationExtend } from '@rocket.chat/apps-engine/definition/accessors';
 import { SettingType } from '@rocket.chat/apps-engine/definition/settings';
 
+/**
+ * Registers all configurable administration settings for RAGChat App.
+ *
+ * Configurable settings include:
+ * - `backend-url`: The HTTP endpoint of the Python FastAPI backend service
+ * - `api-key`: Optional shared secret token for authenticating backend requests
+ * - `model`: Primary Large Language Model for text synthesis
+ * - `embedding-model`: Embedding model for dense vector search
+ * - `max-history`: Sliding window conversational memory length
+ * - `temperature`: Sampling temperature for LLM generation
+ * - `enable-citations`: Flag to toggle showing source chunks and citations
+ */
 export async function registerSettings(
     configuration: IConfigurationExtend,
 ): Promise<void> {
     await Promise.all([
+        // 1. Python RAG Backend URL (Required)
         configuration.settings.provideSetting({
             id: 'backend-url',
             type: SettingType.STRING,
@@ -16,6 +29,7 @@ export async function registerSettings(
             packageValue: 'http://backend:8000',
         }),
 
+        // 2. Shared API Key for Bearer Authentication (Optional)
         configuration.settings.provideSetting({
             id: 'api-key',
             type: SettingType.PASSWORD,
@@ -26,6 +40,7 @@ export async function registerSettings(
             packageValue: '',
         }),
 
+        // 3. LLM Model Selection
         configuration.settings.provideSetting({
             id: 'model',
             type: SettingType.SELECT,
@@ -42,6 +57,7 @@ export async function registerSettings(
             ],
         }),
 
+        // 4. Document & Query Embedding Model
         configuration.settings.provideSetting({
             id: 'embedding-model',
             type: SettingType.SELECT,
@@ -58,6 +74,7 @@ export async function registerSettings(
             ],
         }),
 
+        // 5. Sliding Conversation History Memory Limit
         configuration.settings.provideSetting({
             id: 'max-history',
             type: SettingType.NUMBER,
@@ -68,6 +85,7 @@ export async function registerSettings(
             packageValue: 10,
         }),
 
+        // 6. LLM Generation Temperature
         configuration.settings.provideSetting({
             id: 'temperature',
             type: SettingType.NUMBER,
@@ -78,6 +96,7 @@ export async function registerSettings(
             packageValue: 0.7,
         }),
 
+        // 7. Citation Attachments Toggle
         configuration.settings.provideSetting({
             id: 'enable-citations',
             type: SettingType.BOOLEAN,
@@ -89,3 +108,4 @@ export async function registerSettings(
         }),
     ]);
 }
+

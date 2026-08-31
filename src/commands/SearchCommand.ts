@@ -14,6 +14,9 @@ import { sendMessage, sendPlaceholderMessage, updateMessage } from '../utils/Mes
 import { ERRORS } from '../constants/Errors';
 import { COMMANDS } from '../constants/Commands';
 
+/**
+ * /search slash command — performs semantic search across indexed document chunks.
+ */
 export class SearchCommand implements ISlashCommand {
     public command = COMMANDS.SEARCH;
     public i18nParamsExample = '"search query"';
@@ -33,19 +36,30 @@ export class SearchCommand implements ISlashCommand {
         const threadId = context.getThreadId();
 
         if (args.length === 0) {
-            await sendMessage(read, modify, room, Formatter.usageCommand(COMMANDS.SEARCH, '"query"'), undefined, threadId);
+            await sendMessage(
+                read,
+                modify,
+                room,
+                Formatter.usageCommand(COMMANDS.SEARCH, '"query"'),
+                undefined,
+                threadId,
+            );
             return;
         }
 
         const query = args.join(' ');
 
+        // 1. Send instant typing/placeholder message
         const placeholderId = await sendPlaceholderMessage(
-            read, modify, room,
+            read,
+            modify,
+            room,
             '🔍 _Đang tìm kiếm tài liệu..._',
             threadId,
         );
 
         try {
+            // 2. Call backend semantic search endpoint
             const client = new BackendClient(http, read);
             const results = await client.search(query, 5, sender.id, room.id);
 
@@ -58,15 +72,21 @@ export class SearchCommand implements ISlashCommand {
             const attachment = Formatter.formatSources(sources);
             const answer = `Search results for: **${query}**`;
 
+            // 3. Upsert placeholder with formatted search results
             if (placeholderId) {
                 await updateMessage(placeholderId, read, modify, answer, attachment);
             } else {
                 await sendMessage(read, modify, room, answer, attachment, threadId);
             }
         } catch (error: unknown) {
+            // 4. Safe error handling with editor validation and fallback
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             if (placeholderId) {
-                await updateMessage(placeholderId, read, modify, message);
+                try {
+                    await updateMessage(placeholderId, read, modify, message);
+                } catch {
+                    await sendMessage(read, modify, room, message, undefined, threadId);
+                }
             } else {
                 await sendMessage(read, modify, room, message, undefined, threadId);
             }

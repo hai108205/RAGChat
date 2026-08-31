@@ -11,13 +11,21 @@ import { sendMessage } from '../utils/MessageHelper';
 const SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.pptx', '.csv', '.xlsx', '.html'];
 
 /**
- * Forwards uploaded documents to the RAG backend for indexing.
+ * Intercepts uploaded files and forwards supported documents to the RAG backend for indexing.
  *
- * The upload itself is always allowed to proceed — indexing is a
- * fire-and-forget side effect. The backend notifies the room about
- * the result via the callback endpoint (indexing_complete / indexing_failed).
+ * Implements `IPreFileUpload`.
+ *
+ * Behavior:
+ * 1. Checks file extension against `SUPPORTED_EXTENSIONS`.
+ * 2. Encodes document `Buffer` to base64.
+ * 3. Dispatches indexing request asynchronously to `/api/documents/base64`.
+ * 4. Non-blocking: returns normally to allow the Rocket.Chat file upload to complete seamlessly.
+ *    The backend notifies the room when indexing succeeds or fails via the `CallbackEndpoint`.
  */
 export class FileUploadHandler implements IPreFileUpload {
+    /**
+     * Called before a file is committed to storage.
+     */
     public async executePreFileUpload(
         context: IFileUploadContext,
         read: IRead,
@@ -42,9 +50,7 @@ export class FileUploadHandler implements IPreFileUpload {
                 room_id: file.rid || '',
             });
         } catch (error: unknown) {
-            // Never block the upload itself, but surface the failure — a silent
-            // empty catch left users with no feedback when the backend was
-            // unreachable (and no callback would ever arrive).
+            // Surface failure if backend is unreachable so user is aware indexing did not queue
             const message = error instanceof Error ? error.message : 'Indexing request failed';
             const room = await read.getRoomReader().getById(file.rid);
             if (!room) {
@@ -64,3 +70,4 @@ export class FileUploadHandler implements IPreFileUpload {
         return index === -1 ? '' : filename.slice(index).toLowerCase();
     }
 }
+

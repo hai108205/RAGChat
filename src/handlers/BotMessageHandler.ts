@@ -10,11 +10,24 @@ import { BackendClient } from '../lib/BackendClient';
 import { SessionStore } from '../persistence/sessionStore';
 import { Formatter } from '../utils/Formatter';
 import { sendMessage, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
-import { readBoolean, readMaxHistory } from '../utils/SettingReader';
+import { readMaxHistory } from '../utils/SettingReader';
 import { ERRORS } from '../constants/Errors';
 import { BOT_PREFIX, BOT_SUB_COMMANDS } from '../constants/Commands';
 
+/**
+ * Event handler for direct messages (1-on-1 DMs) sent to the App bot user.
+ *
+ * Implements `IPostMessageSentToBot`.
+ *
+ * Capabilities:
+ * - Bot command dispatcher: `@ai start`, `@ai stats`, `@ai clear`, `@ai help`
+ * - RAG Q&A with conversational memory and asynchronous background dispatch
+ * - Self-loop suppression (ignores messages from the App user itself)
+ */
 export class BotMessageHandler implements IPostMessageSentToBot {
+    /**
+     * Main entry point for direct messages sent to the bot.
+     */
     public async executePostMessageSentToBot(
         message: IMessage,
         read: IRead,
@@ -26,6 +39,7 @@ export class BotMessageHandler implements IPostMessageSentToBot {
             return;
         }
 
+        // Prevent infinite loops by ignoring messages authored by the bot itself
         const appUser = await read.getUserReader().getAppUser();
         if (!appUser || message.sender.id === appUser.id) {
             return;
@@ -33,15 +47,20 @@ export class BotMessageHandler implements IPostMessageSentToBot {
 
         const text = message.text.trim();
 
+        // Check if message is a bot sub-command (e.g. `@ai clear` or `@ai stats`)
         if (text.startsWith(BOT_PREFIX)) {
             const rest = text.slice(BOT_PREFIX.length).trim();
             await this.handleBotCommand(rest, message, read, http, persistence, modify);
             return;
         }
 
+        // Process standard conversational question
         await this.handleQuestion(text, message, read, http, persistence, modify);
     }
 
+    /**
+     * Routes and handles `@ai <subcommand>` invocations.
+     */
     private async handleBotCommand(
         input: string,
         message: IMessage,
@@ -86,11 +105,21 @@ export class BotMessageHandler implements IPostMessageSentToBot {
             }
 
             default: {
-                await sendMessage(read, modify, message.room, `Unknown command: \`${input}\`. Type \`${BOT_PREFIX} help\` for available commands.`, undefined, message.threadId);
+                await sendMessage(
+                    read,
+                    modify,
+                    message.room,
+                    `Unknown command: \`${input}\`. Type \`${BOT_PREFIX} help\` for available commands.`,
+                    undefined,
+                    message.threadId,
+                );
             }
         }
     }
 
+    /**
+     * Fetches and displays knowledge base indexing statistics.
+     */
     private async handleStats(
         message: IMessage,
         read: IRead,
@@ -107,6 +136,10 @@ export class BotMessageHandler implements IPostMessageSentToBot {
         }
     }
 
+    /**
+     * Handles regular text questions sent directly to the bot in DM.
+     * Uses the async ARQ job pattern to guarantee instant response and avoid Deno runtime timeouts.
+     */
     private async handleQuestion(
         text: string,
         message: IMessage,
@@ -115,7 +148,7 @@ export class BotMessageHandler implements IPostMessageSentToBot {
         persistence: IPersistence,
         modify: IModify,
     ): Promise<void> {
-        // Instant feedback so user never sees "still loading" for 3–20s
+        // 1. Instant feedback message returned in <100ms
         const placeholderId = await sendPlaceholderMessage(
             read, modify, message.room,
             '🔍 _Đang tra cứu tài liệu và suy nghĩ câu trả lời..._',
@@ -130,35 +163,31 @@ export class BotMessageHandler implements IPostMessageSentToBot {
             const maxHistory = readMaxHistory(await settings.getValueById('max-history'));
 
             const history = await sessionStore.getHistory(message.sender.id, message.room.id, message.threadId, maxHistory);
-            const response = await client.ask(
+            const requestId = `dm-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+            // 2. Enqueue async job to ARQ worker — results return via CallbackEndpoint
+            await client.askAsync(
                 text,
                 message.sender.id,
                 message.room.id,
+                message.threadId,
+                placeholderId,
                 history,
+                requestId,
             );
-
-            await sessionStore.addMessages(message.sender.id, message.room.id, message.threadId, [
-                { role: 'user', content: text, timestamp: Date.now() },
-                { role: 'assistant', content: response.answer, timestamp: Date.now() },
-            ], maxHistory);
-
-            const enableCitations = readBoolean(await settings.getValueById('enable-citations'));
-            const attachment = enableCitations
-                ? Formatter.formatSources(response.sources)
-                : undefined;
-
-            if (placeholderId) {
-                await updateMessage(placeholderId, read, modify, response.answer, attachment);
-            } else {
-                await sendMessage(read, modify, message.room, response.answer, attachment, message.threadId);
-            }
         } catch (error: unknown) {
+            // 3. Fallback error handling
             const errMsg = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             if (placeholderId) {
-                await updateMessage(placeholderId, read, modify, errMsg, undefined);
+                try {
+                    await updateMessage(placeholderId, read, modify, errMsg, undefined);
+                } catch {
+                    await sendMessage(read, modify, message.room, errMsg, undefined, message.threadId);
+                }
             } else {
                 await sendMessage(read, modify, message.room, errMsg, undefined, message.threadId);
             }
         }
     }
 }
+

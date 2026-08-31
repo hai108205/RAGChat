@@ -1,3 +1,6 @@
+/**
+ * User-facing error messages and templates.
+ */
 export const ERRORS = {
     BACKEND_UNAVAILABLE:
         '⚠️ AI service is currently unavailable. Please try again later.',
@@ -20,3 +23,4 @@ export const ERRORS = {
     BACKEND_ERROR: (status: number) =>
         `Backend returned error (${status}). Please try again later.`,
 } as const;
+

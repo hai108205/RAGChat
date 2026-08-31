@@ -8,6 +8,7 @@ import {
     ISlashCommand,
     SlashCommandContext,
 } from '@rocket.chat/apps-engine/definition/slashcommands';
+import { IRoom } from '@rocket.chat/apps-engine/definition/rooms';
 import { BackendClient } from '../lib/BackendClient';
 import { Formatter } from '../utils/Formatter';
 import { sendMessage, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
@@ -25,6 +26,9 @@ const SUPPORTED_LANGS: Record<string, string> = {
     es: 'Spanish',
 };
 
+/**
+ * /translate slash command — translates text into a specified language (defaults to Vietnamese).
+ */
 export class TranslateCommand implements ISlashCommand {
     public command = COMMANDS.TRANSLATE;
     public i18nParamsExample = '[lang] "text"';
@@ -52,6 +56,7 @@ export class TranslateCommand implements ISlashCommand {
 
         const firstArg = args[0].toLowerCase();
 
+        // 1. Language code detection:
         // Only treat the first token as a language code when there is remaining
         // text after it — `/translate en hello` selects `en`, while `/translate en`
         // (as the whole input) is translated as prose to the default Vietnamese.
@@ -67,28 +72,38 @@ export class TranslateCommand implements ISlashCommand {
             return;
         }
 
+        // 2. Instant typing/placeholder message
         const placeholderId = await sendPlaceholderMessage(
-            read, modify, room,
+            read,
+            modify,
+            room,
             '🔍 _Đang dịch văn bản..._',
             threadId,
         );
 
         try {
+            // 3. Call backend translation endpoint
             const client = new BackendClient(http, read);
             const translation = await client.translate(text, targetLang);
 
             const langName = SUPPORTED_LANGS[targetLang] || targetLang;
             const answer = `**${langName}:**\n\n${translation}`;
 
+            // 4. Upsert placeholder with translated content
             if (placeholderId) {
                 await updateMessage(placeholderId, read, modify, answer);
             } else {
                 await sendMessage(read, modify, room, answer, undefined, threadId);
             }
         } catch (error: unknown) {
+            // 5. Safe error handling with editor validation and fallback
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             if (placeholderId) {
-                await updateMessage(placeholderId, read, modify, message);
+                try {
+                    await updateMessage(placeholderId, read, modify, message);
+                } catch {
+                    await sendMessage(read, modify, room, message, undefined, threadId);
+                }
             } else {
                 await sendMessage(read, modify, room, message, undefined, threadId);
             }
@@ -98,7 +113,7 @@ export class TranslateCommand implements ISlashCommand {
     private async sendUsage(
         read: IRead,
         modify: IModify,
-        room: unknown,
+        room: IRoom | unknown,
         threadId?: string,
     ): Promise<void> {
         const langList = Object.entries(SUPPORTED_LANGS)
@@ -116,3 +131,4 @@ export class TranslateCommand implements ISlashCommand {
         await sendMessage(read, modify, room, usage, undefined, threadId);
     }
 }
+

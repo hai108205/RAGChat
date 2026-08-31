@@ -1,5 +1,4 @@
 import { IMessageAttachment } from '@rocket.chat/apps-engine/definition/messages';
-import { IModify, IRead } from '@rocket.chat/apps-engine/definition/accessors';
 
 export interface CitationSource {
     title: string;
@@ -8,11 +7,20 @@ export interface CitationSource {
     relevance?: number;
 }
 
+/**
+ * Message formatting utilities for markdown rendering and rich IMessageAttachments.
+ */
 export class Formatter {
+    /**
+     * Formats standard slash command usage syntax.
+     */
     public static usageCommand(command: string, example: string): string {
         return `**Usage:** \`/${command} ${example}\``;
     }
 
+    /**
+     * Formats retrieved citation sources into a structured, styled Rocket.Chat IMessageAttachment.
+     */
     public static formatSources(sources: CitationSource[]): IMessageAttachment {
         if (sources.length === 0) {
             return {

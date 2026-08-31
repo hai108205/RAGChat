@@ -11,56 +11,84 @@ import {
     IApiRequest,
     IApiResponse,
 } from '@rocket.chat/apps-engine/definition/api';
+import { SessionStore } from '../persistence/sessionStore';
+import { CitationSource, Formatter } from '../utils/Formatter';
 import { Logger } from '../utils/Logger';
-import { sendMessage } from '../utils/MessageHelper';
+import { sendMessage, updateMessage } from '../utils/MessageHelper';
+import { readBoolean, readMaxHistory } from '../utils/SettingReader';
+import { asNonEmptyString } from '../utils/Validator';
+
+// In-memory set for deduplicating recent callback request IDs (bounded FIFO)
+const processedRequests = new Set<string>();
 
 /**
- * Webhook callback endpoint for the Python backend.
+ * Webhook callback REST API endpoint for the Python RAG backend.
  *
- * The backend calls this endpoint to notify the Rocket.Chat app about
- * async job completion events — e.g., document indexing finished,
- * large summarization done, etc.
+ * Route: POST /api/apps/public/8a800b09-3cc1-4bc1-8dbf-12592fc223eb/callback
  *
- * Registered at: /api/app/callback
+ * Architecture Role:
+ * The Python backend uses asynchronous background workers (ARQ/Redis) to process
+ * heavy RAG operations (document parsing, chunking, embedding generation, LLM streaming).
+ * Once a job finishes or fails, the backend triggers this webhook callback.
+ *
+ * Supported Events:
+ * - `chat_completed`: Upserts the original placeholder message with final LLM answer & citations,
+ *                     then appends the turn to persistent session history.
+ * - `chat_failed`: Upserts the placeholder with an error message.
+ * - `indexing_complete`: Sends a notification in the room confirming document indexing.
+ * - `indexing_failed`: Sends an error notification in the room explaining why indexing failed.
  */
 export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
     public path = 'callback';
 
+    /**
+     * Handles incoming POST webhook notifications from Python backend.
+     */
     public async post(
         request: IApiRequest,
-        endpoint: IApiEndpointInfo,
+        _endpoint: IApiEndpointInfo,
         read: IRead,
         modify: IModify,
-        http: IHttp,
+        _http: IHttp,
         persis: IPersistence,
     ): Promise<IApiResponse> {
         const logger = new Logger(this.app.getLogger(), 'CallbackEndpoint');
         const body = request.content as Record<string, unknown>;
 
-        // Reject unauthenticated callers: this endpoint is UNSECURE (no app-
-        // engine auth), so it must validate the shared api-key itself. The
-        // backend sends `Authorization: Bearer <api_key>`. When no api-key is
-        // configured on either side, auth is disabled (open dev mode) — matching
-        // the backend's own /api/* behaviour.
+        // 1. Authentication check:
+        // Validate the shared API key if configured on the app settings.
+        // Backend sends `Authorization: Bearer <api_key>`.
         if (!(await this.authorize(request, read))) {
-            logger.warn('Rejected unauthenticated callback');
+            logger.warn('Rejected unauthenticated callback from backend');
             return {
                 status: 401,
                 content: { error: 'Unauthorized' },
             };
         }
 
-        logger.info('Received callback', { event: body.event, room_id: body.room_id });
+        logger.info('Received callback event', { event: body.event, room_id: body.room_id });
 
         const event = body.event as string | undefined;
         const userId = body.user_id as string | undefined;
         const roomId = body.room_id as string | undefined;
         const message = body.message as string | undefined;
+        const requestId = body.request_id as string | undefined;
 
+        // 2. Validate mandatory envelope fields
         if (!event || !userId || !roomId) {
             return {
                 status: 400,
                 content: { error: 'Missing required fields: event, user_id, room_id' },
+            };
+        }
+
+        // 3. Idempotency guard:
+        // Prevents processing the same callback twice in case of network retries.
+        if (requestId && processedRequests.has(requestId)) {
+            logger.info('Duplicate callback ignored', { requestId });
+            return {
+                status: 200,
+                content: { status: 'ok', detail: 'duplicate ignored' },
             };
         }
 
@@ -75,7 +103,64 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                 };
             }
 
+            const settings = read.getEnvironmentReader().getSettings();
+
+            // 4. Dispatch event logic
             switch (event) {
+                case 'chat_completed': {
+                    const placeholderId = body.placeholder_id as string | undefined;
+                    const threadId = body.thread_id as string | undefined;
+                    const query = body.query as string | undefined;
+                    const answer = asNonEmptyString(body.answer, 'Không nhận được câu trả lời.');
+                    const sources = (body.sources as CitationSource[]) || [];
+
+                    // Check if citations are enabled by administrator
+                    const enableCitations = readBoolean(await settings.getValueById('enable-citations'));
+                    const attachment = enableCitations && sources.length > 0
+                        ? Formatter.formatSources(sources)
+                        : undefined;
+
+                    // Update placeholder message in-place or fallback to sending a new message
+                    if (placeholderId) {
+                        try {
+                            await updateMessage(placeholderId, read, modify, answer, attachment);
+                        } catch {
+                            await sendMessage(read, modify, room, answer, attachment, threadId);
+                        }
+                    } else {
+                        await sendMessage(read, modify, room, answer, attachment, threadId);
+                    }
+
+                    // Append user query + assistant answer to persistent session history
+                    if (query) {
+                        const sessionStore = new SessionStore(read, persis);
+                        const maxHistory = readMaxHistory(await settings.getValueById('max-history'));
+                        await sessionStore.addMessages(userId, roomId, threadId, [
+                            { role: 'user', content: query, timestamp: Date.now() },
+                            { role: 'assistant', content: answer, timestamp: Date.now() },
+                        ], maxHistory);
+                    }
+                    break;
+                }
+
+                case 'chat_failed': {
+                    const placeholderId = body.placeholder_id as string | undefined;
+                    const threadId = body.thread_id as string | undefined;
+                    const error = asNonEmptyString(body.error, 'Không thể hoàn thành câu trả lời.');
+                    const errorMsg = `❌ **Lỗi phản hồi:** ${error}`;
+
+                    if (placeholderId) {
+                        try {
+                            await updateMessage(placeholderId, read, modify, errorMsg, undefined);
+                        } catch {
+                            await sendMessage(read, modify, room, errorMsg, undefined, threadId);
+                        }
+                    } else {
+                        await sendMessage(read, modify, room, errorMsg, undefined, threadId);
+                    }
+                    break;
+                }
+
                 case 'indexing_complete': {
                     const docName = body.document_name as string || 'Unknown';
                     const chunksCount = body.chunks_count as number || 0;
@@ -105,13 +190,24 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                 }
             }
 
+            // 5. Track request ID in bounded cache
+            if (requestId) {
+                processedRequests.add(requestId);
+                if (processedRequests.size > 1000) {
+                    const firstItem = processedRequests.values().next().value;
+                    if (firstItem) {
+                        processedRequests.delete(firstItem);
+                    }
+                }
+            }
+
             return {
                 status: 200,
                 content: { status: 'ok' },
             };
         } catch (error: unknown) {
             const errMsg = error instanceof Error ? error.message : 'Callback processing failed';
-            logger.error('Callback error', errMsg);
+            logger.error('Callback processing exception', errMsg);
             return {
                 status: 500,
                 content: { error: errMsg },
@@ -119,6 +215,9 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
         }
     }
 
+    /**
+     * Health check endpoint for GET requests.
+     */
     public async get(
         _request: IApiRequest,
         _endpoint: IApiEndpointInfo,
@@ -129,15 +228,13 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
     ): Promise<IApiResponse> {
         return {
             status: 200,
-            content: { status: 'RAGChat Callback Endpoint' },
+            content: { status: 'RAGChat Callback Endpoint active' },
         };
     }
 
     /**
-     * Validate the callback's Bearer token against the app's `api-key` setting.
-     *
-     * Returns true when the token matches. When no api-key is configured, auth
-     * is disabled (open dev mode) to mirror the backend's own `/api/*` contract.
+     * Validates the incoming Authorization Bearer token against the configured `api-key` setting.
+     * When no `api-key` is configured on the app, authentication is bypassed for development ease.
      */
     private async authorize(request: IApiRequest, read: IRead): Promise<boolean> {
         const settings = read.getEnvironmentReader().getSettings();
@@ -152,4 +249,4 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
         const authHeader = headers['Authorization'] ?? headers['authorization'];
         return typeof authHeader === 'string' && authHeader === `Bearer ${expectedKey}`;
     }
-}
+}

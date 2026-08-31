@@ -1,6 +1,6 @@
 {
     "id": "8a800b09-3cc1-4bc1-8dbf-12592fc223eb",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "requiredApiVersion": "^1.44.0",
     "iconFile": "icon.png",
     "author": {
@@ -25,6 +25,9 @@
             "name": "user.write"
         },
         {
+            "name": "room.read"
+        },
+        {
             "name": "message.read"
         },
         {
@@ -41,6 +44,9 @@
         },
         {
             "name": "upload.read"
+        },
+        {
+            "name": "api"
         }
     ]
 }
