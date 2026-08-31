@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **RAGChat** (3145 symbols, 5174 relationships, 168 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **RAGChat** (3300 symbols, 5354 relationships, 168 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
@@ -239,5 +239,3 @@ This repository is equipped with specialized skills located in `.claude/skills/`
 | Skill | Path | Description |
 |---|---|---|
 | `rtk` | `.claude/skills/rtk/SKILL.md` | Token-optimized CLI command wrapper (60-90% token reduction on test, build, git, search). |
-
-
