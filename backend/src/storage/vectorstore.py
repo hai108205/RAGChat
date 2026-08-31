@@ -115,10 +115,16 @@ class VectorStore:
         where, params = self._build_filter_clauses(filters)
         vec = "[" + ",".join(f"{v:.10f}" for v in query_embedding) + "]"
 
+        # Note on pgvector operator precedence:
+        # In PostgreSQL, subtraction '-' has higher precedence than '<=>'.
+        # Writing `1 - embedding <=> CAST(...)` evaluates as `(1 - embedding) <=> CAST(...)`,
+        # which fails with: 'operator does not exist: integer - vector'.
+        # We must explicitly wrap the cosine distance calculation in inner parentheses:
+        # `(1 - (embedding <=> CAST(:vec AS vector)))`.
         sql = (
-            "SELECT cmetadata, document, (1 - embedding <=> CAST(:vec AS vector)) AS similarity "
+            "SELECT cmetadata, document, (1 - (embedding <=> CAST(:vec AS vector))) AS similarity "
             "FROM langchain_pg_embedding "
-            "WHERE (1 - embedding <=> CAST(:vec AS vector)) >= :threshold"
+            "WHERE (1 - (embedding <=> CAST(:vec AS vector))) >= :threshold"
         )
         if where:
             sql += where

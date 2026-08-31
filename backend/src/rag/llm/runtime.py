@@ -13,6 +13,10 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from src.helpers.log import get_logger
+
+logger = get_logger(__name__)
+
 
 def create_chat_model(
     provider: str,
@@ -81,5 +85,14 @@ async def ainvoke(llm: BaseChatModel, system_prompt: str, user_message: str, **k
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_message),
     ]
-    response = await asyncio.to_thread(llm.invoke, messages, **kwargs)
-    return response.content
+    logger.debug(
+        "Invoking LLM (system len: %d, user len: %d)",
+        len(system_prompt),
+        len(user_message),
+    )
+    try:
+        response = await asyncio.to_thread(llm.invoke, messages, **kwargs)
+        return response.content
+    except Exception:
+        logger.exception("LLM invoke failed")
+        raise

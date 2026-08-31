@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api import chat, documents
+from src.api import chat, chat_jobs, documents
 from src.config import settings
 from src.helpers.log import get_logger
 from src.monitoring import setup_metrics
@@ -86,6 +86,7 @@ app.add_middleware(
 )
 
 app.include_router(chat.router, prefix="/api")
+app.include_router(chat_jobs.router, prefix="/api")
 app.include_router(documents.router, prefix="/api")
 
 setup_metrics(app)

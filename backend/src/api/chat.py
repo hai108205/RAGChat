@@ -4,8 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from src.api.deps import require_api_key
+from src.helpers.log import get_logger
 from src.state import state
 
+logger = get_logger(__name__)
 router = APIRouter(tags=["chat"], dependencies=[Depends(require_api_key)])
 
 
@@ -92,6 +94,7 @@ async def chat(request: ChatRequest):
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("Error in /chat")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -117,6 +120,7 @@ async def search(request: SearchRequest):
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("Error in /search")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -129,6 +133,7 @@ async def summarize(request: TextRequest):
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("Error in /summarize")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -141,6 +146,7 @@ async def explain(request: ConceptRequest):
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("Error in /explain")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -156,6 +162,7 @@ async def translate(request: TranslateRequest):
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("Error in /translate")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -171,4 +178,5 @@ async def generate_reply(request: GenerateReplyRequest):
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("Error in /generate-reply")
         raise HTTPException(status_code=500, detail=str(e))

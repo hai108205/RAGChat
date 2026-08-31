@@ -128,6 +128,78 @@ async def index_document_job(
         }
 
 
+async def chat_job(
+    ctx: dict,
+    request_id: str,
+    query: str,
+    user_id: str = "",
+    room_id: str = "",
+    thread_id: str = "",
+    placeholder_id: str = "",
+    history: list[dict] | None = None,
+) -> dict:
+    """Background job: execute RAG pipeline and notify Rocket.Chat app via callback."""
+    pipeline = ctx.get("pipeline")
+    if pipeline is None:
+        logger.error("Chat job failed: RAG pipeline not initialized in worker context", extra={"request_id": request_id})
+        await notify_app(
+            "chat_failed",
+            request_id=request_id,
+            user_id=user_id,
+            room_id=room_id,
+            thread_id=thread_id,
+            placeholder_id=placeholder_id,
+            query=query,
+            error="RAG pipeline not initialized in worker context",
+        )
+        return {"status": "error", "request_id": request_id, "error": "Pipeline not initialized"}
+
+    try:
+        logger.info("Executing chat job", extra={"request_id": request_id, "user_id": user_id, "room_id": room_id})
+        result = await pipeline.ask(
+            query=query,
+            history=history,
+            room_id=room_id,
+            user_id=user_id,
+        )
+        await notify_app(
+            "chat_completed",
+            request_id=request_id,
+            user_id=user_id,
+            room_id=room_id,
+            thread_id=thread_id,
+            placeholder_id=placeholder_id,
+            query=query,
+            answer=result["answer"],
+            sources=result.get("sources", []),
+            model=result.get("model", ""),
+        )
+        return {
+            "status": "completed",
+            "request_id": request_id,
+            "answer": result["answer"],
+            "sources": result.get("sources", []),
+            "model": result.get("model", ""),
+        }
+    except Exception as e:
+        logger.exception("Chat job failed", extra={"request_id": request_id})
+        await notify_app(
+            "chat_failed",
+            request_id=request_id,
+            user_id=user_id,
+            room_id=room_id,
+            thread_id=thread_id,
+            placeholder_id=placeholder_id,
+            query=query,
+            error=str(e),
+        )
+        return {
+            "status": "error",
+            "request_id": request_id,
+            "error": str(e),
+        }
+
+
 async def delete_document_job(
     ctx: dict,
     doc_id: str,
@@ -153,6 +225,31 @@ async def delete_document_job(
 # ---------------------------------------------------------------------------
 # Enqueue helpers (called from API endpoints)
 # ---------------------------------------------------------------------------
+
+
+async def enqueue_chat_job(
+    request_id: str,
+    query: str,
+    user_id: str = "",
+    room_id: str = "",
+    thread_id: str = "",
+    placeholder_id: str = "",
+    history: list[dict] | None = None,
+) -> str:
+    """Enqueue a chat question for async processing. Returns the ARQ job ID."""
+    pool = await get_redis_pool()
+    job = await pool.enqueue_job(
+        "chat_job",
+        request_id,
+        query,
+        user_id,
+        room_id,
+        thread_id,
+        placeholder_id,
+        history,
+        _job_id=f"chat:{request_id}",
+    )
+    return job.job_id if job else f"chat:{request_id}"
 
 
 async def enqueue_index_document(
@@ -211,16 +308,18 @@ class WorkerSettings:
     Used by: arq src.taskqueue.WorkerSettings
     """
 
-    functions = (index_document_job, delete_document_job)
+    functions = (index_document_job, delete_document_job, chat_job)
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = 10
-    job_timeout = 600  # 10 minutes for large documents
+    job_timeout = 600  # 10 minutes for large documents / complex RAG
     poll_delay = 0.5
 
     @staticmethod
     async def on_startup(ctx: dict) -> None:
-        """Build the embedder and vector store shared by all jobs."""
+        """Build the embedder, vector store, llm, and RAG pipeline shared by all jobs."""
         from src.rag.embedding.embedder import Embedder
+        from src.rag.llm.runtime import create_chat_model
+        from src.rag.pipeline import RAGPipeline
         from src.storage.vectorstore import VectorStore
 
         embedder = Embedder(
@@ -231,11 +330,34 @@ class WorkerSettings:
         vector_store = VectorStore(settings.database_url, embeddings=embedder.embeddings)
         await vector_store.initialize()
 
+        llm = create_chat_model(
+            provider=settings.llm_provider,
+            model=settings.model,
+            api_key=settings.openai_api_key if settings.llm_provider == "openai" else settings.anthropic_api_key,
+            temperature=settings.temperature,
+            max_tokens=settings.max_tokens,
+            base_url=(
+                settings.openai_base_url if settings.llm_provider == "openai" else settings.anthropic_base_url
+            ),
+        )
+
+        pipeline = RAGPipeline(
+            embedder=embedder,
+            vector_store=vector_store,
+            llm=llm,
+            top_k=settings.top_k,
+            synthesis_strategy=settings.synthesis_strategy,
+            provider=settings.llm_provider,
+        )
+
         ctx["embedder"] = embedder
         ctx["vector_store"] = vector_store
+        ctx["llm"] = llm
+        ctx["pipeline"] = pipeline
 
     @staticmethod
     async def on_shutdown(ctx: dict) -> None:
         vector_store = ctx.get("vector_store")
         if vector_store is not None:
             await vector_store.close()
+

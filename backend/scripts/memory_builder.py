@@ -19,10 +19,10 @@ from src.helpers.id_generator import generate_document_id, generate_version_hash
 from src.helpers.log import get_logger
 from src.rag.document.loader import DocumentLoader
 from src.rag.embedding.embedder import Embedder
-from src.storage.vectorstore import VectorStore
+from src.services.ingest_documents_service.document_registry import DocumentRegistry
 from src.services.ingest_documents_service.ingest import ingest_document, remove_from_registry
 from src.services.ingest_documents_service.registry_store import get_registry_session
-from src.services.ingest_documents_service.document_registry import DocumentRegistry
+from src.storage.vectorstore import VectorStore
 
 logger = get_logger(__name__)
 
