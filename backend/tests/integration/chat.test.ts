@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import request from "supertest";
 import { app } from "../../app.js";
 
-describe("Chat Routes", () => {
+describe.skipIf(process.env.ENABLE_WEB_ROUTES !== "true")("Chat Routes", () => {
     let agent: any;
     const timestamp = Date.now();
     const testUser = {

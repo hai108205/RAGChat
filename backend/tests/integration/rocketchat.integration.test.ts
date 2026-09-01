@@ -117,6 +117,7 @@ vi.mock("openai", () => {
 const { default: rocketchatRouter } = await import(
     "../../routers/rocketchatIntegration.route.js"
 );
+const { app: mainApp } = await import("../../app.js");
 
 function buildTestApp() {
     const app = express();
@@ -178,6 +179,29 @@ describe("Rocket.Chat Integration Router", () => {
 
             const app = buildTestApp();
             const res = await request(app)
+                .get("/api/v1/integrations/rocketchat/stats")
+                .set("Authorization", "Bearer test-secret-token");
+            expect(res.status).toBe(200);
+            expect(res.body.data).toBeDefined();
+        });
+    });
+
+    describe("Route Surface Isolation", () => {
+        it("returns 404 for web auth routes when ENABLE_WEB_ROUTES is not enabled", async () => {
+            const res = await request(mainApp).post("/api/v1/user/login").send({
+                email: "test@example.com",
+                password: "password123",
+            });
+            expect(res.status).toBe(404);
+        });
+
+        it("serves rocketchat integration routes on main application with valid token", async () => {
+            chatSourceFindManyMock.mockResolvedValue([]);
+            usageEventsAggregateMock.mockResolvedValue({
+                _sum: { inputTokens: 0, outputTokens: 0 },
+            });
+
+            const res = await request(mainApp)
                 .get("/api/v1/integrations/rocketchat/stats")
                 .set("Authorization", "Bearer test-secret-token");
             expect(res.status).toBe(200);

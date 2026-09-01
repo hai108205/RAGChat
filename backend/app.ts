@@ -64,8 +64,9 @@ app.use(
     }),
 );
 
-app.use(express.json({ limit: "16kb" }));
-app.use(express.urlencoded({ extended: true, limit: "16kb" }));
+const jsonLimit = process.env.JSON_BODY_LIMIT || "10mb";
+app.use(express.json({ limit: jsonLimit }));
+app.use(express.urlencoded({ extended: true, limit: jsonLimit }));
 app.use(express.static("public"));
 app.use(cookieParser());
 
@@ -79,12 +80,17 @@ import adminRouter from "./routers/admin.route.js";
 import rocketchatRouter from "./routers/rocketchatIntegration.route.js";
 
 // Routes Declaration
-app.use("/api/v1/user", userRouter);
-app.use("/api/v1/apikey", apikeyRouter);
-app.use("/api/v1/chat", chatRouter);
-app.use("/api/v1/chat-message", chatMessageRouter);
-app.use("/api/v1/usage", usageRouter);
-app.use("/api/v1/admin", adminRouter);
+const ENABLE_WEB_ROUTES = process.env.ENABLE_WEB_ROUTES === "true";
+
+if (ENABLE_WEB_ROUTES) {
+    app.use("/api/v1/user", userRouter);
+    app.use("/api/v1/apikey", apikeyRouter);
+    app.use("/api/v1/chat", chatRouter);
+    app.use("/api/v1/chat-message", chatMessageRouter);
+    app.use("/api/v1/usage", usageRouter);
+    app.use("/api/v1/admin", adminRouter);
+}
+
 app.use("/api/v1/integrations/rocketchat", rocketchatRouter);
 
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {

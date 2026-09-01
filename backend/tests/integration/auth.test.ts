@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import request from "supertest";
 import { app } from "../../app.js";
 
-describe("Auth Routes", () => {
+describe.skipIf(process.env.ENABLE_WEB_ROUTES !== "true")("Auth Routes", () => {
     const timestamp = Date.now();
     const testUser = {
         fullname: "Test Auth User",
