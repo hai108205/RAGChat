@@ -1,38 +1,39 @@
 # RAGChat
 
-A Rocket.Chat bot that answers questions from uploaded documents using a RAG (Retrieval-Augmented Generation) system.
+A Rocket.Chat app and AI service that answers questions from documentation and uploaded documents using RAG (Retrieval-Augmented Generation).
 
-The app runs inside Rocket.Chat and talks to a Python backend that indexes documents into a vector database (pgVector) and generates answers via LLMs (OpenAI / Anthropic Claude).
+The app runs inside Rocket.Chat and communicates with a Node.js/Express backend that indexes documents into a vector database (Qdrant), manages conversational contexts in PostgreSQL (via Prisma), and generates answers via LLMs (OpenRouter/OpenAI/Anthropic/Google).
 
 ## Architecture
 
 ```
 ┌─────────────────┐      ┌──────────────────┐      ┌─────────────────────────┐
 │  Rocket.Chat    │      │  RAGChat App     │      │  RAGChat Backend (API)  │
-│  (bot @mention, │◄────►│  (TypeScript)    │◄────►│  FastAPI + RAG pipeline │
-│   DM, uploads)  │      │  handlers,       │      │                         │
-└─────────────────┘      │  commands,       │      └──────────┬──────────────┘
-                         │  IHttp client    │                 │
-                         └──────────────────┘      ┌──────────┴──────────────┐
-                                                   │  Postgres + pgVector    │
-                                                   │  Redis (ARQ worker)     │
-                                                   │  MinIO (optional)       │
+│  (bot @mention, │◄────►│  (TypeScript)    │◄────►│  Express + Node.js      │
+│   DM, uploads)  │      │  handlers,       │      │  /api/v1/integrations/  │
+└─────────────────┘      │  commands,       │      │  rocketchat/*           │
+                         │  IHttp client    │      └──────────┬──────────────┘
+                         └──────────────────┘                 │
+                                                   ┌──────────┴──────────────┐
+                                                   │  PostgreSQL (Prisma)    │
+                                                   │  Redis (BullMQ worker)  │
+                                                   │  Qdrant Vector DB       │
                                                    └─────────────────────────┘
 ```
 
-- **Rocket.Chat App** (`src/`, TypeScript): listens for DMs to the bot, `@mention`s in channels, and file uploads; calls the backend over HTTP.
-- **Backend** (`backend/src/`, Python): FastAPI service. Loads → parses → chunks → embeds documents, stores chunks in pgVector, and answers questions with citations.
+- **Rocket.Chat App** (`src/`, TypeScript): listens for DMs to the bot, `@mention`s in channels, and file uploads; calls backend integration endpoints and receives webhook callbacks.
+- **Backend** (`backend/`, Node.js/Express): Prisma ORM, BullMQ workers, Qdrant vector database, usage tracking, and audit logging.
 
 ## Features
 
 - **DM with the bot** — ask questions directly in a direct message.
 - **Channel `@mention`** — mention the bot (`@RAGChat your question`) to get answers in-thread.
-- **File upload indexing** — drop a supported document (`.pdf`, `.docx`, `.txt`, `.md`, `.pptx`, `.csv`, `.xlsx`, `.html`) and it is indexed automatically.
-- **RAG Q&A with citations** — answers reference the source documents.
+- **File upload indexing** — drop a supported document (`.pdf`, `.docx`, `.txt`, `.md`, `.pptx`, `.csv`, `.xlsx`, `.html`) to index it into the vector store.
+- **RAG Q&A with citations** — answers reference source documents with relevance scores.
 - **Slash commands** — `/ask`, `/search`, `/summarize`, `/explain`, `/translate`.
 - **Bot sub-commands** — `@ai start`, `@ai help`, `@ai stats`, `@ai clear`.
-- **Async indexing** — optional ARQ background jobs with status and Rocket.Chat webhook callbacks.
-- **Monitoring** — Prometheus `/metrics` + Grafana dashboards.
+- **Async processing** — instant placeholder feedback in Rocket.Chat with background worker execution and webhook callbacks.
+- **Monitoring** — `/healthz` check, Prometheus `/metrics`, and usage analytics.
 
 ## Repository layout
 
@@ -40,161 +41,128 @@ The app runs inside Rocket.Chat and talks to a Python backend that indexes docum
 RagChatApp.ts              App entrypoint (implements IPostMessageSentToBot, IPostMessageSent, IPreFileUpload)
 app.json                   App manifest (permissions, interfaces)
 src/                       Rocket.Chat App source (handlers, commands, lib, settings, utils)
-backend/                   Python RAG backend
-  src/api/                 FastAPI routers (chat, documents)
-  src/rag/                 document loaders, LLM adapters, RAG pipeline
-  src/services/            chat history, ingest service, app callback
-  src/taskqueue/           ARQ background worker
-  src/storage/             vector store (pgVector), object store (MinIO)
-  src/models/              SQLModel registry
-  tests/                   unit + integration tests
-docker/                    docker-compose stack, Dockerfiles, Prometheus/Grafana config
-.github/workflows/         CI/CD
+backend/                   Node.js RAG backend
+  controllers/             Express route controllers
+  routers/                 API routers (user, chat, message, integrations)
+  middlewares/             Auth, rate limiting, and validation middlewares
+  utils/                   RAG utilities, Prisma client, Qdrant client, metrics
+  prisma/                  Prisma schema and migrations
+  tests/                   Unit and integration tests
+  Dockerfile               Backend production image used by the full-stack compose
+  docker-compose.test.yml  Backend-only PostgreSQL test database
+docker/                    Full-stack Docker Compose runtime
+docs/api/                  Integration contract documentation
 ```
 
 ## Prerequisites
 
-- Node.js 18+ and npm
-- Python 3.12+
-- Docker (optional, for the full stack)
-- OpenAI API key (or Anthropic API key)
+- Node.js 18+ and pnpm / npm
+- Docker with the Compose plugin (for PostgreSQL, Redis, Qdrant, backend, worker, and Rocket.Chat)
+- OpenRouter API key (or OpenAI / Anthropic key)
 
 ## Running the project
 
-### 1. Configuration (single source: root `.env`)
+### 1. Configuration
 
-**One `.env` at the project root drives everything** — the local backend and Docker Compose read the same file. Copy the template and fill in your secrets:
+Copy the backend environment template and configure secrets:
 
 ```bash
-cp .env.example .env   # then edit: OPENAI_API_KEY (or ANTHROPIC_API_KEY + LLM_PROVIDER=claude)
+cp backend/.env.example backend/.env
 ```
 
-The backend resolves this root `.env` automatically (pydantic-settings + `find_dotenv`, walking up from `backend/`); in Docker the values are injected by compose. See `.env.example` for the full list (secret, runtime, monitoring and tuning variables).
+The full-stack Docker Compose file reads `backend/.env.example` first and then
+overrides it with `backend/.env` when that file exists. Container hostnames for
+PostgreSQL, Redis, and Qdrant are set in `docker/docker-compose.yml`.
 
-Key variables (defaults are in `backend/src/config.py`; beyond these, see `.env.example`):
+Key environment variables:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OPENAI_API_KEY` | — | OpenAI key (embedding + LLM) |
-| `ANTHROPIC_API_KEY` | — | Anthropic key (Claude LLM) |
-| `LLM_PROVIDER` | `openai` | `openai` or `claude` |
-| `MODEL` | `gpt-4o` | LLM model name |
-| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
-| `USE_MINIO` | `false` | Store uploads in MinIO |
-| `USE_ASYNC_INDEXING` | `false` | Use ARQ background jobs |
-| `API_KEY` | `""` | Bearer token required on `/api/*` (empty = open) |
-| `APP_CALLBACK_URL` | `""` | Rocket.Chat webhook for job notifications |
-| `SIMILARITY_THRESHOLD` | `0.3` | Retrieval relevance cutoff |
+| Variable | Description |
+|----------|-------------|
+| `PORT` | Backend HTTP port (default `8000`) |
+| `DATABASE_URL` | PostgreSQL connection URL |
+| `REDIS_HOST` / `REDIS_PORT` | Redis server for BullMQ and caching |
+| `QDRANT_URL` | Qdrant vector database URL (e.g. `http://localhost:6333`) |
+| `OPENROUTER_LLM_API_KEY` | OpenRouter LLM API key |
+| `OPENROUTER_EMBEDDING_API_KEY` | OpenRouter embedding API key |
+| `ROCKETCHAT_INTEGRATION_TOKEN` | Shared secret token for authenticating integration requests |
 
-Then pick either **A: Docker** (recommended, full stack) or **B: local backend**.
-
-### A. Full stack with Docker Compose (recommended)
-
-Starts Postgres+pgVector, Redis, MinIO, the FastAPI backend (and Opt-in worker, Prometheus, Grafana):
+### 2. Full Stack with Docker Compose
 
 ```bash
-make docker-up            # or: docker compose -f docker/docker-compose.yml up -d
-make docker-logs          # tail logs
-make docker-down          # stop the stack
+make docker-up            # Starts Postgres, Redis, Qdrant, backend, BullMQ worker, and Rocket.Chat
+make docker-config        # Validate the full-stack compose file
+make docker-logs          # Tail service logs
+make docker-down          # Stop all containers
 ```
 
-Services (`docker/docker-compose.yml`):
+`docker/docker-compose.yml` is the only full-stack runtime compose file. The
+backend keeps `backend/docker-compose.test.yml` only for backend test database
+setup.
 
-| Service | Purpose |
-|---------|---------|
-| `postgres` | pgVector vector database |
-| `redis` | Queue + chat history cache |
-| `minio` | Object storage for uploads (optional) |
-| `backend` | FastAPI RAG API on `:8000` |
-| `worker` | ARQ background indexing worker (opt-in: `--profile async`) |
-| `prometheus` | Metrics collection |
-| `grafana` | Dashboards |
-
-### B. Local backend (needs Postgres + Redis running)
+### 3. Local Development
 
 ```bash
-# 1. Start the infra containers only (Postgres+pgVector, Redis)
-docker compose -f docker/docker-compose.yml up -d postgres redis
+# 1. Start infrastructure services (Postgres, Redis, Qdrant)
+docker compose -f docker/docker-compose.yml up -d postgres redis qdrant
 
-# 2. Install backend deps
-cd backend
-pip install -e ".[dev]"
+# 2. Install dependencies and generate Prisma client
+make install
+make generate
 
-# 3. Create the registry tables
+# 3. Apply database migrations
 make migrate
 
-# 4. Start the API server (uvicorn on :8000)
+# 4. Start backend server
 make start
 
-# (optional) 5. ARQ worker for async indexing
+# 5. Start BullMQ background worker (in a separate terminal)
 make start-worker
 ```
 
-### Verify it's up
-
-```bash
-curl http://localhost:8000/health      # expect {"status":"ok"} or similar
-```
-
-## Rocket.Chat App setup
+## Rocket.Chat App Setup
 
 Install dependencies and typecheck:
 
 ```bash
-npm ci
+npm install
 npx tsc --noEmit
 ```
 
-Deploy the app to a Rocket.Chat instance:
+Deploy the app to your Rocket.Chat instance:
 
 ```bash
-rc-apps deploy --url http://localhost:3000 --username admin --password admin
+rc-apps deploy --url http://localhost:3001 --username admin --password admin
 ```
 
-Then configure the app settings (Admin → Apps → RAGChat → Settings):
+Configure App Settings (Administration → Apps → RAGChat → Settings):
+- **Backend URL** — `http://backend:8000` (or `http://localhost:8000`)
+- **Integration Token** — Must match `ROCKETCHAT_INTEGRATION_TOKEN` configured on the backend
 
-- **Backend URL** — e.g. `http://localhost:8000`
-- **API Key** — must match the backend `API_KEY` if set
-- **LLM Model / Embedding Model** — model selection
-
-## Development
+## Testing
 
 ```bash
-make test          # run backend tests
-make test-cov      # run with coverage (threshold 60%)
-make lint          # ruff check
-make format        # ruff format
-make tidy          # format + lint --fix
+make test-ci               # Run backend unit and integration test suite
+npx tsc --noEmit           # Typecheck Rocket.Chat app
 ```
 
-Pre-commit hooks (ruff + whitespace checks) run automatically on commit — `pre-commit install` to enable locally.
+Backend test database helpers:
 
-### CI/CD
+```bash
+make docker-test-up
+make docker-test-down
+```
 
-`.github/workflows/`:
+## Integration API Reference
 
-- **CI Backend** (`ci-backend.yaml`) — ruff lint/format + pytest coverage on `backend/**` changes.
-- **CI App** (`ci-app.yaml`) — `tsc --noEmit` on app changes.
-- **CD** (`cd.yaml`) — builds the backend and app Docker images when a `v*` tag is pushed (no push of images).
-
-## API reference
-
-Base URL `http://localhost:8000`. Requires `Authorization: Bearer <API_KEY>` when `API_KEY` is set.
+Full specification available in [`docs/api/rocketchat-integration-contract.md`](docs/api/rocketchat-integration-contract.md).
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/chat` | RAG Q&A (query + history) |
-| `DELETE` | `/api/chat/history` | Clear server-side chat history |
-| `POST` | `/api/search` | Semantic search over chunks |
-| `POST` | `/api/summarize` | Summarize text |
-| `POST` | `/api/explain` | Explain a concept |
-| `POST` | `/api/translate` | Translate text |
-| `POST` | `/api/generate-reply` | Suggest a chat reply |
-| `POST` | `/api/documents` | Upload document (multipart) |
-| `POST` | `/api/documents/base64` | Upload document (base64 JSON, for the app's IHttp) |
-| `GET` | `/api/documents` | List indexed documents |
-| `DELETE` | `/api/documents/{id}` | Delete a document |
-| `GET` | `/health` | Health check |
+| `POST` | `/api/v1/integrations/rocketchat/messages/async` | Enqueue asynchronous RAG Q&A query |
+| `GET` | `/api/v1/integrations/rocketchat/stats` | Retrieve indexed document stats and usage |
+| `POST` | `/api/v1/integrations/rocketchat/sources/base64` | Upload and index base64 encoded document |
+| `POST` | `/api/v1/integrations/rocketchat/utilities/completion` | Text utilities (`summarize`, `explain`, `translate`, `search`) |
+| `GET` | `/healthz` | Health check endpoint |
 | `GET` | `/metrics` | Prometheus metrics |
 
 ## License
