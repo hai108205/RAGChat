@@ -1078,13 +1078,13 @@ git commit -m "feat: add rocketchat uikit source actions"
 - Delete later: `backend/controllers/admin.controller.ts`
 - Delete later: unused routers/middlewares/tests
 
-- [ ] **Step 1: Run detect changes before destructive cleanup**
+- [x] **Step 1: Run detect changes before destructive cleanup**
 
 ```bash
 node .gitnexus/run.cjs detect-changes -r RAGChat
 ```
 
-- [ ] **Step 2: Remove only after replacement tests pass**
+- [x] **Step 2: Remove only after replacement tests pass**
 
 Do not delete controllers until:
 
@@ -1093,7 +1093,7 @@ Do not delete controllers until:
 - source list/delete/feedback passes.
 - app build passes.
 
-- [ ] **Step 3: Drop dependencies only when imports are gone**
+- [x] **Step 3: Drop dependencies only when imports are gone**
 
 Candidates after web auth removal:
 
@@ -1109,7 +1109,7 @@ Run:
 rg "bcrypt|jsonwebtoken|resend" backend
 ```
 
-- [ ] **Step 4: Prisma migration**
+- [x] **Step 4: Prisma migration**
 
 Only after route cleanup:
 
@@ -1123,7 +1123,7 @@ Expected:
 - Migration generated.
 - Existing internal Rocket.Chat users remain valid.
 
-- [ ] **Step 5: Full backend tests**
+- [x] **Step 5: Full backend tests**
 
 ```bash
 cd backend
@@ -1132,7 +1132,7 @@ pnpm vitest run
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/package.json backend/prisma/schema.prisma backend/prisma/migrations backend/app.ts
@@ -1143,16 +1143,16 @@ git commit -m "refactor: remove unused web auth backend"
 
 ## Verification Checklist
 
-- [ ] GitNexus impact was run before each symbol edit.
-- [ ] `node .gitnexus/run.cjs detect-changes -r RAGChat` was run before commit.
-- [ ] Integration token still protects all Rocket.Chat backend endpoints.
-- [ ] Login/register/reset routes are disabled by default.
-- [ ] Rocket.Chat App can ask a question and receive callback.
-- [ ] Uploaded document is searchable through Qdrant retrieval.
-- [ ] `/sources` returns room/workspace relevant documents.
-- [ ] `DELETE /sources/:sourceId` handles DB and Qdrant safely.
-- [ ] Feedback writes audit telemetry.
-- [ ] App build succeeds after client contract changes.
+- [x] GitNexus impact was run before each symbol edit.
+- [x] `node .gitnexus/run.cjs detect-changes -r RAGChat` was run before commit.
+- [x] Integration token still protects all Rocket.Chat backend endpoints.
+- [x] Login/register/reset routes are disabled by default.
+- [x] Rocket.Chat App can ask a question and receive callback.
+- [x] Uploaded document is searchable through Qdrant retrieval.
+- [x] `/sources` returns room/workspace relevant documents.
+- [x] `DELETE /sources/:sourceId` handles DB and Qdrant safely.
+- [x] Feedback writes audit telemetry.
+- [x] App build succeeds after client contract changes.
 
 ---
 
