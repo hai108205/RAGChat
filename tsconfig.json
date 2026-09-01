@@ -12,6 +12,13 @@
     "experimentalDecorators": true,
     },
 "include": [
-    "**/*.ts"
-    ]
+    "src/**/*.ts",
+    "RagChatApp.ts",
+    "tests/**/*.ts"
+  ],
+"exclude": [
+    "node_modules",
+    "backend",
+    "dist"
+  ]
 }

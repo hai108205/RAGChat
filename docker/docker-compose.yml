@@ -1,9 +1,22 @@
+x-backend-env-file: &backend-env-file
+  - path: ../backend/.env.example
+    required: true
+  - path: ../backend/.env
+    required: false
+
+x-backend-environment: &backend-environment
+  NODE_ENV: production
+  PORT: "8000"
+  CORS_ORIGIN: http://localhost:3001
+  CORS_METHODS: GET,POST,PUT,DELETE
+  DATABASE_URL: postgresql://ragchat:ragchat@postgres:5432/ragchat
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  QDRANT_URL: http://qdrant:6333
+
 services:
-  # ──────────────────────────────────────────────────
-  # PostgreSQL + pgVector
-  # ──────────────────────────────────────────────────
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16-alpine
     container_name: ragchat-postgres
     environment:
       POSTGRES_USER: ragchat
@@ -14,15 +27,14 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ragchat"]
+      test: ["CMD-SHELL", "pg_isready -U ragchat -d ragchat"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
     restart: unless-stopped
+    networks:
+      - ragchat-network
 
-  # ──────────────────────────────────────────────────
-  # Redis — cache + ARQ job queue
-  # ──────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: ragchat-redis
@@ -34,134 +46,98 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
     restart: unless-stopped
+    networks:
+      - ragchat-network
 
-  # ──────────────────────────────────────────────────
-  # MinIO — S3-compatible object storage for documents
-  # ──────────────────────────────────────────────────
-  minio:
-    image: minio/minio:latest
-    container_name: ragchat-minio
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+  qdrant:
+    image: qdrant/qdrant:v1.13.6
+    container_name: ragchat-qdrant
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "6333:6333"
     volumes:
-      - miniodata:/data
+      - qdrantdata:/qdrant/storage
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333' || exit 1"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
     restart: unless-stopped
+    networks:
+      - ragchat-network
 
-  # ──────────────────────────────────────────────────
-  # Python Backend — FastAPI + LangChain RAG service
-  # ──────────────────────────────────────────────────
+  backend-migrate:
+    image: ragchat-backend:local
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: ragchat-backend-migrate
+    command: ["pnpm", "prisma", "migrate", "deploy"]
+    env_file: *backend-env-file
+    environment: *backend-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - ragchat-network
+
   backend:
+    image: ragchat-backend:local
     build:
       context: ../backend
       dockerfile: Dockerfile
     container_name: ragchat-backend
-    env_file:
-      - ../.env
-    environment:
-      DATABASE_URL: postgresql://ragchat:ragchat@postgres:5432/ragchat
-      REDIS_URL: redis://redis:6379/0
-      UPLOAD_DIR: /data/uploads
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+    env_file: *backend-env-file
+    environment: *backend-environment
     ports:
       - "8000:8000"
-    volumes:
-      - uploads:/data/uploads
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
+      qdrant:
         condition: service_healthy
+      backend-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8000/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     restart: unless-stopped
+    networks:
+      - ragchat-network
 
-  # ──────────────────────────────────────────────────
-  # ARQ Worker — background document indexing
-  # ──────────────────────────────────────────────────
   worker:
+    image: ragchat-backend:local
     build:
       context: ../backend
       dockerfile: Dockerfile
     container_name: ragchat-worker
-    command: arq src.taskqueue.WorkerSettings
-    env_file:
-      - ../.env
-    environment:
-      DATABASE_URL: postgresql://ragchat:ragchat@postgres:5432/ragchat
-      REDIS_URL: redis://redis:6379/0
-      UPLOAD_DIR: /data/uploads
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-    volumes:
-      - uploads:/data/uploads
+    command: ["node", "dist/chatWorker.js"]
+    env_file: *backend-env-file
+    environment: *backend-environment
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      backend-migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
+    networks:
+      - ragchat-network
 
-  # ──────────────────────────────────────────────────
-  # Prometheus — metrics collection
-  # ──────────────────────────────────────────────────
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: ragchat-prometheus
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--storage.tsdb.retention.time=15d"
-    volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheusdata:/prometheus
-    ports:
-      - "9090:9090"
-    depends_on:
-      - backend
-    restart: unless-stopped
-
-  # ──────────────────────────────────────────────────
-  # Grafana — metrics dashboards
-  # ──────────────────────────────────────────────────
-  grafana:
-    image: grafana/grafana:latest
-    container_name: ragchat-grafana
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
-      GF_INSTALL_PLUGINS: ""
-    volumes:
-      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
-      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
-      - grafana-data:/var/lib/grafana
-    ports:
-      - "3000:3000"
-    depends_on:
-      - prometheus
-    restart: unless-stopped
-
-  # ──────────────────────────────────────────────────
-  # MongoDB — Rocket.Chat primary database
-  # ──────────────────────────────────────────────────
   mongo:
     image: mongo:5
     container_name: ragchat-mongo
-    command: mongod --replSet rs0
+    command: mongod --replSet rs0 --bind_ip_all
     volumes:
       - mongodata:/data/db
     healthcheck:
@@ -169,14 +145,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 30
-      start_period: 60s
+      start_period: 30s
     restart: unless-stopped
+    networks:
+      - ragchat-network
 
-  # ──────────────────────────────────────────────────
-  # Mongo Init — one-shot replica set bootstrap
-  # Runs after mongo is healthy, bootstraps rs0 via shell script, waits for
-  # primary election, then exits cleanly. Keeps mongo's default entrypoint intact.
-  # ──────────────────────────────────────────────────
   mongo-init:
     image: mongo:5
     container_name: ragchat-mongo-init
@@ -187,19 +160,18 @@ services:
       mongo:
         condition: service_healthy
     restart: "no"
+    networks:
+      - ragchat-network
 
-  # ──────────────────────────────────────────────────
-  # Rocket.Chat — app host (the `src/` TypeScript app deploys here)
-  # ──────────────────────────────────────────────────
   rocketchat:
     image: rocketchat/rocket.chat:6.13.0
     container_name: ragchat-rocketchat
     environment:
       MONGO_URL: mongodb://mongo:27017/rocketchat?replicaSet=rs0
-      ROOT_URL: http://localhost:3001
-      PORT: 3000
-      DEPLOY_METHOD: docker
       MONGO_OPLOG_URL: mongodb://mongo:27017/local?replicaSet=rs0
+      ROOT_URL: http://localhost:3001
+      PORT: "3000"
+      DEPLOY_METHOD: docker
       OVERWRITE_SETTING_Show_Setup_Wizard: "completed"
     volumes:
       - rocketchat-uploads:/app/uploads
@@ -211,21 +183,22 @@ services:
     ports:
       - "3001:3000"
     restart: unless-stopped
+    networks:
+      - ragchat-network
 
 volumes:
   pgdata:
-    name: ragchat-pgdata
+    name: ragchat-postgresdata
   redisdata:
     name: ragchat-redisdata
-  miniodata:
-    name: ragchat-miniodata
-  uploads:
-    name: ragchat-uploads
-  rocketchat-uploads:
-    name: ragchat-rocketchat-uploads
-  prometheusdata:
-    name: ragchat-prometheusdata
-  grafana-data:
-    name: ragchat-grafana-data
+  qdrantdata:
+    name: ragchat-qdrantdata
   mongodata:
     name: ragchat-mongodata
+  rocketchat-uploads:
+    name: ragchat-rocketchat-uploads
+
+networks:
+  ragchat-network:
+    name: ragchat-network
+    driver: bridge

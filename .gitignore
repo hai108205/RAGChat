@@ -3,11 +3,13 @@ node_modules/
 
 # rc-apps package output
 dist/
+.tmp-dist/
 .rcappsconfig
 .rcappsconfig.json
 
 # Python
 __pycache__/
+.ruff_cache/
 *.py[cod]
 *.egg-info/
 build/
@@ -16,6 +18,13 @@ venv/
 .env
 backend/data/
 *.egg
+
+# Generated clients/dependencies
+backend/generated/
+backend/node_modules/
+
+# Local agent/editor state
+.claude/settings.local.json
 
 # JetBrains IDEs
 out/
