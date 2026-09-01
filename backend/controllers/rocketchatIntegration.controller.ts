@@ -362,6 +362,7 @@ export const handleAsyncMessage = asyncHandler(async (req: Request, res: Respons
                 room_id: roomId,
                 thread_id: threadId || undefined,
                 placeholder_id: placeholderId || undefined,
+                chat_message_id: chatMessage.id,
                 query,
                 answer: llmResponse,
                 sources: citations,

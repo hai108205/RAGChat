@@ -311,6 +311,47 @@ describe("Rocket.Chat Integration Router", () => {
 
             expect(res.status).toBe(400);
         });
+
+        it("delivers callback with chat_message_id on completion", async () => {
+            userFindFirstMock.mockResolvedValue({ id: "user-cb-1" });
+            chatFindFirstMock.mockResolvedValue({ id: "chat-cb-1", chatSources: [] });
+            chatMessageCreateMock.mockResolvedValue({ id: "msg-cb-123" });
+            usageEventsCreateMock.mockResolvedValue({});
+            auditEventCreateMock.mockResolvedValue({});
+
+            let callbackBody: any = null;
+            const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+                if (init && init.body) {
+                    callbackBody = JSON.parse(init.body as string);
+                }
+                return new Response(JSON.stringify({ ok: true }), { status: 200 });
+            });
+
+            const app = buildTestApp();
+            const res = await request(app)
+                .post("/api/v1/integrations/rocketchat/messages/async")
+                .set("Authorization", "Bearer test-secret-token")
+                .send({
+                    workspaceId: "default",
+                    rocketUserId: "u123",
+                    roomId: "GENERAL",
+                    requestId: "req-cb-test",
+                    query: "How do I deploy?",
+                    callbackUrl: "https://rocketchat.example.com/api/callback",
+                });
+
+            expect(res.status).toBe(202);
+
+            // Wait for background async task to complete
+            await new Promise((resolve) => setTimeout(resolve, 80));
+
+            expect(callbackBody).toBeDefined();
+            expect(callbackBody.event).toBe("chat_completed");
+            expect(callbackBody.chat_message_id).toBe("msg-cb-123");
+            expect(callbackBody.request_id).toBe("req-cb-test");
+
+            fetchSpy.mockRestore();
+        });
     });
 
     describe("GET /stats", () => {

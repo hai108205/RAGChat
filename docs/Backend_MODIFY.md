@@ -808,13 +808,13 @@ git commit -m "feat: record rocketchat answer feedback"
 - Modify later: `src/persistence/sessionStore.ts` only if storing backend ids locally
 - Test: `backend/tests/integration/rocketchat.integration.test.ts`
 
-- [ ] **Step 1: Run impact analysis**
+- [x] **Step 1: Run impact analysis**
 
 ```bash
 node .gitnexus/run.cjs impact -r RAGChat handleAsyncMessage --direction upstream --file backend/controllers/rocketchatIntegration.controller.ts
 ```
 
-- [ ] **Step 2: Extend callback payload**
+- [x] **Step 2: Extend callback payload**
 
 Add:
 
@@ -824,7 +824,7 @@ chat_message_id: chatMessage.id,
 
 to `chat_completed`.
 
-- [ ] **Step 3: Update tests**
+- [x] **Step 3: Update tests**
 
 Assert callback body contains:
 
@@ -835,7 +835,7 @@ Assert callback body contains:
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 ```bash
 cd backend
@@ -844,7 +844,7 @@ pnpm vitest run tests/integration/rocketchat.integration.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/controllers/rocketchatIntegration.controller.ts backend/tests/integration/rocketchat.integration.test.ts
