@@ -6,24 +6,40 @@ import { ILogger } from '@rocket.chat/apps-engine/definition/accessors';
  */
 export class Logger {
     constructor(
-        private logger: ILogger,
-        private context: string,
+        private logger?: ILogger | null,
+        private context: string = 'RAGChat',
     ) {}
 
     public debug(message: string, ...args: unknown[]): void {
-        this.logger.debug(`[${this.context}] ${message}`, ...args);
+        if (this.logger) {
+            this.logger.debug(`[${this.context}] ${message}`, ...args);
+        } else {
+            console.debug(`[${this.context}] ${message}`, ...args);
+        }
     }
 
     public info(message: string, ...args: unknown[]): void {
-        this.logger.info(`[${this.context}] ${message}`, ...args);
+        if (this.logger) {
+            this.logger.info(`[${this.context}] ${message}`, ...args);
+        } else {
+            console.info(`[${this.context}] ${message}`, ...args);
+        }
     }
 
     public warn(message: string, ...args: unknown[]): void {
-        this.logger.warn(`[${this.context}] ${message}`, ...args);
+        if (this.logger) {
+            this.logger.warn(`[${this.context}] ${message}`, ...args);
+        } else {
+            console.warn(`[${this.context}] ${message}`, ...args);
+        }
     }
 
     public error(message: string, ...args: unknown[]): void {
-        this.logger.error(`[${this.context}] ${message}`, ...args);
+        if (this.logger) {
+            this.logger.error(`[${this.context}] ${message}`, ...args);
+        } else {
+            console.error(`[${this.context}] ${message}`, ...args);
+        }
     }
 }
 

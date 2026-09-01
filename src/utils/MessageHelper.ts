@@ -2,7 +2,6 @@ import { IModify, IRead } from '@rocket.chat/apps-engine/definition/accessors';
 import { IMessageAttachment } from '@rocket.chat/apps-engine/definition/messages';
 import { IRoom } from '@rocket.chat/apps-engine/definition/rooms';
 import { BlockBuilder, IBlock } from '@rocket.chat/apps-engine/definition/uikit';
-import { LayoutBlock } from '@rocket.chat/ui-kit';
 import { asNonEmptyString } from './Validator';
 
 /**
@@ -104,6 +103,7 @@ export async function updateMessage(
     modify: IModify,
     text: string,
     attachment?: IMessageAttachment,
+    blocks?: BlockBuilder | IBlock[],
 ): Promise<void> {
     if (!messageId || typeof messageId !== 'string' || !messageId.trim()) {
         throw new Error('Invalid messageId for updateMessage');
@@ -123,6 +123,10 @@ export async function updateMessage(
         builder.setAttachments([attachment]);
     } else {
         builder.setAttachments([]);
+    }
+
+    if (blocks) {
+        builder.setBlocks(blocks);
     }
 
     await modify.getUpdater().finish(builder);
@@ -161,7 +165,7 @@ export async function sendMessageWithBlocks(
     modify: IModify,
     room: IRoom | unknown,
     text: string,
-    blocks: BlockBuilder | Array<IBlock | LayoutBlock>,
+    blocks: BlockBuilder | IBlock[],
     threadId?: string,
 ): Promise<void> {
     const appUser = await read.getUserReader().getAppUser();

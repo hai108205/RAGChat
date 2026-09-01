@@ -17,6 +17,7 @@ import { IPostMessageSentToBot } from '@rocket.chat/apps-engine/definition/messa
 import { IPostMessageSent } from '@rocket.chat/apps-engine/definition/messages/IPostMessageSent';
 import { IPreFileUpload, IFileUploadContext } from '@rocket.chat/apps-engine/definition/uploads';
 import { ApiVisibility, ApiSecurity } from '@rocket.chat/apps-engine/definition/api';
+import { UIActionButtonContext } from '@rocket.chat/apps-engine/definition/ui';
 import {
     IUIKitInteractionHandler,
     UIKitBlockInteractionContext,
@@ -38,7 +39,9 @@ import { MentionHandler } from './src/handlers/MentionHandler';
 import { FileUploadHandler } from './src/handlers/FileUploadHandler';
 import { BlockActionHandler } from './src/handlers/BlockActionHandler';
 import { ViewSubmitHandler } from './src/handlers/ViewSubmitHandler';
+import { ActionButtonHandler } from './src/handlers/ActionButtonHandler';
 import { CallbackEndpoint } from './src/api/CallbackEndpoint';
+import { Validator } from './src/utils/Validator';
 
 /**
  * Main application class for RAGChat.
@@ -46,12 +49,13 @@ import { CallbackEndpoint } from './src/api/CallbackEndpoint';
  * Implements core App-Engine lifecycle hooks and registers:
  * - App Settings (backend URL, API key, LLM parameters)
  * - Slash Commands (/ask, /search, /summarize, /explain, /translate, /rag)
+ * - UI Context Action Buttons (Summarize thread, Ask AI, Translate, Index message)
  * - REST API Endpoints (Webhook callback for asynchronous AI worker notifications)
  * - Event Handlers:
  *   - IPostMessageSentToBot: handles 1-on-1 direct messages to the bot
  *   - IPostMessageSent: handles @mentions in public and private channels
  *   - IPreFileUpload: intercepts document uploads to index them into vector DB
- *   - IUIKitInteractionHandler: handles interactive buttons and modal submits
+ *   - IUIKitInteractionHandler: handles interactive buttons, modals, and context action clicks
  */
 export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessageSent, IPreFileUpload, IUIKitInteractionHandler {
     // Lazy-instantiated handlers to optimize memory and lifecycle initialization
@@ -60,6 +64,7 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
     private uploadHandler: FileUploadHandler | null = null;
     private blockActionHandler: BlockActionHandler | null = null;
     private viewSubmitHandler: ViewSubmitHandler | null = null;
+    private actionButtonHandler: ActionButtonHandler | null = null;
 
     private getBotHandler(): BotMessageHandler {
         if (!this.botHandler) {
@@ -96,13 +101,20 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
         return this.viewSubmitHandler;
     }
 
+    private getActionButtonHandler(): ActionButtonHandler {
+        if (!this.actionButtonHandler) {
+            this.actionButtonHandler = new ActionButtonHandler();
+        }
+        return this.actionButtonHandler;
+    }
+
     constructor(info: IAppInfo, logger: ILogger, accessors: IAppAccessors) {
         super(info, logger, accessors);
     }
 
     /**
      * Feature registration phase. Called once during app initialization.
-     * Registers settings, slash commands, and webhook API endpoints.
+     * Registers settings, slash commands, UI action buttons, and webhook API endpoints.
      */
     protected async extendConfiguration(
         configuration: IConfigurationExtend,
@@ -121,7 +133,31 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
             configuration.slashCommands.provideSlashCommand(new RagCommand()),
         ]);
 
-        // 3. Register callback endpoint for backend async job completions
+        // 3. Register message context action buttons (right click / meatball menu)
+        await Promise.all([
+            configuration.ui.registerButton({
+                actionId: 'action-summarize-thread',
+                labelI18n: 'Summarize_Thread',
+                context: UIActionButtonContext.MESSAGE_ACTION,
+            }),
+            configuration.ui.registerButton({
+                actionId: 'action-ask-ai-context',
+                labelI18n: 'Ask_AI_Context',
+                context: UIActionButtonContext.MESSAGE_ACTION,
+            }),
+            configuration.ui.registerButton({
+                actionId: 'action-translate-message',
+                labelI18n: 'Translate_Message',
+                context: UIActionButtonContext.MESSAGE_ACTION,
+            }),
+            configuration.ui.registerButton({
+                actionId: 'action-index-message',
+                labelI18n: 'Index_Message',
+                context: UIActionButtonContext.MESSAGE_ACTION,
+            }),
+        ]);
+
+        // 4. Register callback endpoint for backend async job completions
         await configuration.api.provideApi({
             visibility: ApiVisibility.PUBLIC,
             security: ApiSecurity.UNSECURE,
@@ -144,6 +180,48 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
 
         if (!backendUrl || typeof backendUrl !== 'string' || !backendUrl.trim()) {
             this.getLogger().error('Backend URL is not configured — cannot enable RAGChat app');
+            return false;
+        }
+
+        // Integration token is required: the public callback endpoint authenticates
+        // backend webhooks with it. Legacy `api-key` is accepted as a fallback.
+        const integrationToken = await settings.getValueById('integration-token');
+        const legacyApiKey = await settings.getValueById('api-key');
+        const hasToken =
+            (typeof integrationToken === 'string' && integrationToken.trim().length > 0) ||
+            (typeof legacyApiKey === 'string' && legacyApiKey.trim().length > 0);
+
+        const allowDev = await settings.getValueById('allow-unauthenticated-callbacks-dev');
+        const devMode = allowDev === true;
+
+        if (!hasToken && !devMode) {
+            this.getLogger().error(
+                'Integration token is not configured — set `integration-token` (or legacy `api-key`). ' +
+                'Refusing to enable the public callback endpoint without authentication.',
+            );
+            return false;
+        }
+
+        if (!hasToken && devMode) {
+            this.getLogger().warn(
+                '[DEV MODE] RAGChat is running WITHOUT callback authentication. ' +
+                'Anyone who knows the public app URL can spoof backend callbacks. Do NOT use in production.',
+            );
+        }
+
+        const callbackBaseUrl = await settings.getValueById('callback-base-url');
+        if (!callbackBaseUrl || typeof callbackBaseUrl !== 'string' || !callbackBaseUrl.trim()) {
+            this.getLogger().error(
+                'Callback public URL is not configured — set `callback-base-url` to the public Rocket.Chat URL. ' +
+                'Refusing to enable because async jobs would not be able to update placeholders.',
+            );
+            return false;
+        }
+
+        if (!Validator.isValidUrl(callbackBaseUrl.trim())) {
+            this.getLogger().error(
+                'Callback public URL is invalid — set `callback-base-url` to a valid public Rocket.Chat URL.',
+            );
             return false;
         }
 
@@ -251,12 +329,11 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
 
     public async executeActionButtonHandler(
         context: UIKitActionButtonInteractionContext,
-        _read: IRead,
-        _http: IHttp,
-        _persistence: IPersistence,
-        _modify: IModify,
+        read: IRead,
+        http: IHttp,
+        persistence: IPersistence,
+        modify: IModify,
     ): Promise<IUIKitResponse> {
-        return context.getInteractionResponder().successResponse();
+        return this.getActionButtonHandler().handleActionButton(context, read, http, persistence, modify);
     }
 }
-

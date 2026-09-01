@@ -9,10 +9,12 @@ import { IPostMessageSentToBot } from '@rocket.chat/apps-engine/definition/messa
 import { BackendClient } from '../lib/BackendClient';
 import { SessionStore } from '../persistence/sessionStore';
 import { Formatter } from '../utils/Formatter';
-import { sendMessage, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
+import { sendMessage, sendMessageWithBlocks, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
 import { readMaxHistory } from '../utils/SettingReader';
+import { buildCallbackUrl } from '../utils/CallbackUrl';
 import { ERRORS } from '../constants/Errors';
 import { BOT_PREFIX, BOT_SUB_COMMANDS } from '../constants/Commands';
+import { addSuggestionChipsBlocks } from '../uikit';
 
 /**
  * Event handler for direct messages (1-on-1 DMs) sent to the App bot user.
@@ -78,7 +80,12 @@ export class BotMessageHandler implements IPostMessageSentToBot {
 
         switch (subCommand.toLowerCase()) {
             case BOT_SUB_COMMANDS.START: {
-                await sendMessage(read, modify, message.room, Formatter.formatWelcomeMessage(), undefined, message.threadId);
+                const blockBuilder = modify.getCreator().getBlockBuilder();
+                blockBuilder.addSectionBlock({
+                    text: blockBuilder.newMarkdownTextObject(Formatter.formatWelcomeMessage()),
+                });
+                addSuggestionChipsBlocks(blockBuilder);
+                await sendMessageWithBlocks(read, modify, message.room, Formatter.formatWelcomeMessage(), blockBuilder, message.threadId);
                 break;
             }
 
@@ -100,7 +107,12 @@ export class BotMessageHandler implements IPostMessageSentToBot {
             }
 
             case BOT_SUB_COMMANDS.HELP: {
-                await sendMessage(read, modify, message.room, Formatter.formatHelpMessage(), undefined, message.threadId);
+                const blockBuilder = modify.getCreator().getBlockBuilder();
+                blockBuilder.addSectionBlock({
+                    text: blockBuilder.newMarkdownTextObject(Formatter.formatHelpMessage()),
+                });
+                addSuggestionChipsBlocks(blockBuilder);
+                await sendMessageWithBlocks(read, modify, message.room, Formatter.formatHelpMessage(), blockBuilder, message.threadId);
                 break;
             }
 
@@ -184,6 +196,7 @@ export class BotMessageHandler implements IPostMessageSentToBot {
 
             const history = await sessionStore.getHistory(message.sender.id, message.room.id, message.threadId, maxHistory);
             const requestId = `dm-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+            const callbackUrl = await buildCallbackUrl(read);
 
             // 2. Enqueue async job to backend — results return via CallbackEndpoint
             await client.askAsync(
@@ -195,6 +208,7 @@ export class BotMessageHandler implements IPostMessageSentToBot {
                 history,
                 requestId,
                 workspaceId,
+                callbackUrl,
             );
         } catch (error: unknown) {
             // 3. Fallback error handling

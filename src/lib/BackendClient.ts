@@ -28,6 +28,22 @@ export interface BackendAskResponse {
     model: string;
 }
 
+/**
+ * HTTP timeouts (ms).
+ * Rocket.Chat Apps Engine enforces a ~10s budget on slash-command/action
+ * handlers, so interactive paths must stay well under it. Async enqueue paths
+ * (ask/upload) can tolerate more because they return after the backend
+ * acknowledges with HTTP 202.
+ */
+export const HTTP_TIMEOUT = {
+    /** Default for non-interactive calls (async enqueue, uploads, list/delete). */
+    DEFAULT: 60000,
+    /** LLM-backed utility endpoints (summarize / explain / translate). */
+    UTILITY: 8000,
+    /** Vector search — no LLM generation, must feel instant. */
+    SEARCH: 5000,
+} as const;
+
 export { SearchResult, SourceDocument, SourcesListData, FeedbackPayload } from './BackendTypes';
 
 /**
@@ -209,13 +225,15 @@ export class BackendClient {
 
     /**
      * Summarizes text using the utility endpoint `/api/v1/integrations/rocketchat/utilities/completion`.
+     * Uses a short timeout to fit within the Apps Engine ~10s handler budget.
      */
     public async summarize(text: string): Promise<string> {
         try {
-            const response = await this.post('/api/v1/integrations/rocketchat/utilities/completion', {
-                operation: 'summarize',
-                text,
-            });
+            const response = await this.post(
+                '/api/v1/integrations/rocketchat/utilities/completion',
+                { operation: 'summarize', text },
+                HTTP_TIMEOUT.UTILITY,
+            );
             const data = this.extractData<UtilityCompletionData>(response);
             return data?.result || data?.summary || 'No summary generated.';
         } catch (error: unknown) {
@@ -226,13 +244,15 @@ export class BackendClient {
 
     /**
      * Explains a concept using the utility endpoint `/api/v1/integrations/rocketchat/utilities/completion`.
+     * Uses a short timeout to fit within the Apps Engine ~10s handler budget.
      */
     public async explain(concept: string): Promise<string> {
         try {
-            const response = await this.post('/api/v1/integrations/rocketchat/utilities/completion', {
-                operation: 'explain',
-                concept,
-            });
+            const response = await this.post(
+                '/api/v1/integrations/rocketchat/utilities/completion',
+                { operation: 'explain', concept },
+                HTTP_TIMEOUT.UTILITY,
+            );
             const data = this.extractData<UtilityCompletionData>(response);
             return data?.result || data?.explanation || 'No explanation generated.';
         } catch (error: unknown) {
@@ -243,14 +263,15 @@ export class BackendClient {
 
     /**
      * Translates text using the utility endpoint `/api/v1/integrations/rocketchat/utilities/completion`.
+     * Uses a short timeout to fit within the Apps Engine ~10s handler budget.
      */
     public async translate(text: string, targetLang: string = 'vi'): Promise<string> {
         try {
-            const response = await this.post('/api/v1/integrations/rocketchat/utilities/completion', {
-                operation: 'translate',
-                text,
-                targetLang,
-            });
+            const response = await this.post(
+                '/api/v1/integrations/rocketchat/utilities/completion',
+                { operation: 'translate', text, targetLang },
+                HTTP_TIMEOUT.UTILITY,
+            );
             const data = this.extractData<UtilityCompletionData>(response);
             return data?.result || data?.translation || 'No translation generated.';
         } catch (error: unknown) {
@@ -261,6 +282,7 @@ export class BackendClient {
 
     /**
      * Searches knowledge base documents via `/api/v1/integrations/rocketchat/utilities/completion`.
+     * Vector search has no LLM generation step — uses the tightest timeout.
      */
     public async search(
         query: string,
@@ -269,12 +291,11 @@ export class BackendClient {
         roomId?: string,
     ): Promise<SearchResult[]> {
         try {
-            const response = await this.post('/api/v1/integrations/rocketchat/utilities/completion', {
-                operation: 'search',
-                query,
-                topK,
-                roomId,
-            });
+            const response = await this.post(
+                '/api/v1/integrations/rocketchat/utilities/completion',
+                { operation: 'search', query, topK, roomId },
+                HTTP_TIMEOUT.SEARCH,
+            );
             const data = this.extractData<UtilityCompletionData>(response);
             return data?.results || [];
         } catch (error: unknown) {
@@ -378,10 +399,13 @@ export class BackendClient {
 
     /**
      * Executes HTTP POST request to backend with headers and timeout.
+     * Defaults to 60s; interactive callers (commands, action handlers) should
+     * pass a tighter budget via `HTTP_TIMEOUT.UTILITY` / `HTTP_TIMEOUT.SEARCH`.
      */
     public async post(
         path: string,
         data: unknown,
+        timeoutMs: number = HTTP_TIMEOUT.DEFAULT,
     ): Promise<IHttpResponse> {
         const url = `${await this.getBackendUrl()}${path}`;
         const headers = await this.buildHeaders();
@@ -389,7 +413,7 @@ export class BackendClient {
         const response = await this.http.post(url, {
             data,
             headers,
-            timeout: 60000,
+            timeout: timeoutMs,
         });
 
         this.assertSuccess(response);

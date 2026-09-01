@@ -31,11 +31,11 @@ export async function registerSettings(
             packageValue: 'http://backend:8000',
         }),
 
-        // 2. Shared Integration Token (Recommended)
+        // 2. Shared Integration Token (Required — callbacks and backend calls are authenticated with it)
         configuration.settings.provideSetting({
             id: 'integration-token',
             type: SettingType.PASSWORD,
-            required: false,
+            required: true,
             public: false,
             i18nLabel: 'Integration Token',
             i18nDescription: 'Shared secret token for authenticating requests with the Node backend',
@@ -127,6 +127,29 @@ export async function registerSettings(
             i18nLabel: 'Enable Citations',
             i18nDescription: 'Show document sources with each answer',
             packageValue: true,
+        }),
+
+        // 10. Public Callback Base URL (required for async job updates)
+        configuration.settings.provideSetting({
+            id: 'callback-base-url',
+            type: SettingType.STRING,
+            required: true,
+            public: false,
+            i18nLabel: 'Callback Base URL',
+            i18nDescription: 'Public URL of this Rocket.Chat workspace, reachable from the backend (e.g. https://chat.example.com). Used to build the async job callback URL.',
+            i18nPlaceholder: 'https://chat.example.com',
+            packageValue: '',
+        }),
+
+        // 11. DEV ONLY: allow unauthenticated callbacks (never enable in production)
+        configuration.settings.provideSetting({
+            id: 'allow-unauthenticated-callbacks-dev',
+            type: SettingType.BOOLEAN,
+            required: false,
+            public: false,
+            i18nLabel: '[DEV] Allow Unauthenticated Callbacks',
+            i18nDescription: 'DANGEROUS: skip Bearer-token verification on the public callback endpoint. Local development only.',
+            packageValue: false,
         }),
     ]);
 }

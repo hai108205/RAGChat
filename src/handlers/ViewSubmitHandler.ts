@@ -10,7 +10,13 @@ import {
 } from '@rocket.chat/apps-engine/definition/uikit';
 import { BackendClient } from '../lib/BackendClient';
 import { sendNotification } from '../utils/MessageHelper';
+import { Logger } from '../utils/Logger';
 
+/**
+ * Handles Rocket.Chat UIKit modal form submissions.
+ *
+ * Implements 2-step safe document deletion confirmations and future modal actions.
+ */
 export class ViewSubmitHandler {
     public async handleViewSubmit(
         context: UIKitViewSubmitInteractionContext,
@@ -19,13 +25,21 @@ export class ViewSubmitHandler {
         _persistence: IPersistence,
         modify: IModify,
     ): Promise<IUIKitResponse> {
+        const logger = new Logger(null, 'ViewSubmitHandler');
         const data = context.getInteractionData();
         const { view, user, room } = data;
 
-        if (view.id === 'confirm-delete-source') {
+        // 1. Confirm Delete Source Modal Submission
+        if (view.id === 'confirm-delete-source' || view.id.startsWith('confirm-delete:') || view.id.startsWith('confirm-delete')) {
             const state = (view.state as any) || {};
-            const sourceId = state.sourceId || (view as any).clear?.value;
+
+            let sourceId = state.sourceId || (view as any).clear?.value;
+            if (!sourceId && view.id.startsWith('confirm-delete:')) {
+                sourceId = view.id.replace(/^confirm-delete:/, '').trim();
+            }
+
             const roomId = state.roomId || room?.id;
+            const filename = state.filename || sourceId;
 
             if (sourceId && roomId) {
                 const client = new BackendClient(http, read);
@@ -36,32 +50,39 @@ export class ViewSubmitHandler {
                         workspaceId = wsSetting.trim();
                     }
                 } catch {
-                    // Default
+                    // Default workspace
                 }
 
                 try {
                     await client.deleteSource(sourceId, workspaceId, roomId, 'room');
-                    if (room) {
+                    const targetRoom = room || (await read.getRoomReader().getById(roomId));
+                    if (targetRoom) {
                         await sendNotification(
                             read,
                             modify,
                             user,
-                            room,
-                            `🗑️ Đã xoá tài liệu thành công.`,
+                            targetRoom,
+                            `🗑️ Đã xoá vĩnh viễn tài liệu **\`${filename}\`** (ID: \`${sourceId}\`) khỏi Knowledge Base.`,
                         );
                     }
                 } catch (err: any) {
-                    if (room) {
+                    logger.error('Failed to delete source via modal submit', err);
+                    const targetRoom = room || (await read.getRoomReader().getById(roomId));
+                    if (targetRoom) {
                         await sendNotification(
                             read,
                             modify,
                             user,
-                            room,
+                            targetRoom,
                             `❌ Lỗi khi xoá tài liệu: ${err.message || 'Lỗi hệ thống'}`,
                         );
                     }
                 }
+            } else {
+                logger.warn('Missing sourceId or roomId in confirm-delete modal submission', { sourceId, roomId });
             }
+
+            return context.getInteractionResponder().successResponse();
         }
 
         return context.getInteractionResponder().successResponse();

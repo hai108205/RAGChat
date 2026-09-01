@@ -12,6 +12,7 @@ import { SessionStore } from '../persistence/sessionStore';
 import { Formatter } from '../utils/Formatter';
 import { sendMessage, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
 import { readMaxHistory } from '../utils/SettingReader';
+import { buildCallbackUrl } from '../utils/CallbackUrl';
 import { ERRORS } from '../constants/Errors';
 import { BOT_PREFIX, BOT_SUB_COMMANDS } from '../constants/Commands';
 
@@ -112,6 +113,7 @@ export class MentionHandler implements IPostMessageSent {
 
             const history = await sessionStore.getHistory(message.sender.id, message.room.id, message.threadId, maxHistory);
             const requestId = `mention-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+            const callbackUrl = await buildCallbackUrl(read);
 
             // 4. Enqueue async job to backend — results return via CallbackEndpoint
             await client.askAsync(
@@ -123,6 +125,7 @@ export class MentionHandler implements IPostMessageSent {
                 history,
                 requestId,
                 workspaceId,
+                callbackUrl,
             );
         } catch (error: unknown) {
             // 5. Fallback error handling

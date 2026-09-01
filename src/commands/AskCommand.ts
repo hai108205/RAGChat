@@ -13,6 +13,7 @@ import { SessionStore } from '../persistence/sessionStore';
 import { Formatter } from '../utils/Formatter';
 import { sendMessage, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
 import { readMaxHistory } from '../utils/SettingReader';
+import { buildCallbackUrl } from '../utils/CallbackUrl';
 import { ERRORS } from '../constants/Errors';
 import { COMMANDS } from '../constants/Commands';
 
@@ -79,6 +80,7 @@ export class AskCommand implements ISlashCommand {
 
             const history = await sessionStore.getHistory(sender.id, room.id, threadId, maxHistory);
             const requestId = `ask-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+            const callbackUrl = await buildCallbackUrl(read);
 
             // Enqueue async job to Node backend.
             // Executor terminates immediately in < 2 seconds, avoiding Rocket.Chat 10s Deno timeout.
@@ -92,6 +94,7 @@ export class AskCommand implements ISlashCommand {
                 history,
                 requestId,
                 workspaceId,
+                callbackUrl,
             );
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;

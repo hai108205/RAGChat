@@ -12,11 +12,13 @@ import {
     IApiResponse,
 } from '@rocket.chat/apps-engine/definition/api';
 import { SessionStore } from '../persistence/sessionStore';
+import { saveMessageActionPayload } from '../persistence/messagePayloadStore';
 import { CitationSource, Formatter } from '../utils/Formatter';
 import { Logger } from '../utils/Logger';
 import { sendMessage, updateMessage } from '../utils/MessageHelper';
 import { readBoolean, readMaxHistory } from '../utils/SettingReader';
 import { asNonEmptyString } from '../utils/Validator';
+import { buildActionButtonsBlock } from '../uikit';
 
 // In-memory set for deduplicating recent callback request IDs (bounded FIFO)
 const processedRequests = new Set<string>();
@@ -132,10 +134,38 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                         ? Formatter.formatSources(sources)
                         : undefined;
 
+                    // Persist heavy fields (rawMarkdown, sources, query) so button values stay small.
+                    // Buttons only carry `{ action, messageId, ... }`; the interaction handler
+                    // looks up the full payload from App Persistence.
+                    if (placeholderId) {
+                        try {
+                            await saveMessageActionPayload(persis, {
+                                messageId: placeholderId,
+                                chatMessageId: body.chat_message_id as string | undefined,
+                                query,
+                                rawMarkdown: answer,
+                                sources,
+                                sourcesCount: sources.length,
+                                createdAt: Date.now(),
+                            });
+                        } catch (persistErr) {
+                            logger.warn('Failed to persist message action payload', persistErr);
+                        }
+                    }
+
+                    // Build interactive action buttons block (👍, 👎, 🔄, 📋, 🔍)
+                    const blockBuilder = modify.getCreator().getBlockBuilder();
+                    buildActionButtonsBlock(blockBuilder, {
+                        messageId: placeholderId,
+                        chatMessageId: body.chat_message_id as string | undefined,
+                        query,
+                        sourcesCount: sources.length,
+                    });
+
                     // Update placeholder message in-place or fallback to sending a new message
                     if (placeholderId) {
                         try {
-                            await updateMessage(placeholderId, read, modify, answer, attachment);
+                            await updateMessage(placeholderId, read, modify, answer, attachment, blockBuilder);
                         } catch {
                             await sendMessage(read, modify, room, answer, attachment, threadId);
                         }
@@ -250,6 +280,10 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
 
     /**
      * Validates the incoming Authorization Bearer token against `integration-token` or `api-key`.
+     *
+     * Returns `false` when:
+     * - no token is configured AND `allow-unauthenticated-callbacks-dev` is not enabled
+     * - the request does not carry `Authorization: Bearer <expected-token>`
      */
     private async authorize(request: IApiRequest, read: IRead): Promise<boolean> {
         const settings = read.getEnvironmentReader().getSettings();
@@ -271,9 +305,26 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
             }
         }
 
-        // When no token is configured on the app, allow in development mode
         if (!expectedToken) {
-            return true;
+            // No token configured — only allow when the explicit dev-mode flag is set.
+            let devAllowed = false;
+            try {
+                const flag = await settings.getValueById('allow-unauthenticated-callbacks-dev');
+                devAllowed = flag === true;
+            } catch {
+                devAllowed = false;
+            }
+
+            if (devAllowed) {
+                const logger = new Logger(this.app.getLogger(), 'CallbackEndpoint');
+                logger.warn(
+                    '[DEV MODE] Accepting unauthenticated callback — ' +
+                    'no integration-token/api-key configured and allow-unauthenticated-callbacks-dev=true.',
+                );
+                return true;
+            }
+
+            return false;
         }
 
         const headers = request.headers || {};
