@@ -15,7 +15,8 @@ export interface GetOrCreateRocketChatUserInput {
 }
 
 /**
- * Finds or creates an internal User record corresponding to a Rocket.Chat user.
+ * Finds or creates an internal service identity for a Rocket.Chat user.
+ * This is not a login account and should not receive a password.
  */
 export async function getOrCreateRocketChatUser({ workspaceId, rocketUserId }: GetOrCreateRocketChatUserInput) {
     const username = normalizeRocketChatUsername(workspaceId, rocketUserId);
