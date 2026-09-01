@@ -330,6 +330,52 @@ describe("Rocket.Chat Integration Router", () => {
         });
     });
 
+    describe("GET /sources", () => {
+        it("returns formatted sources list filtered by workspace and room", async () => {
+            chatSourceFindManyMock.mockResolvedValue([
+                {
+                    id: "source-1",
+                    heading: "guide.md",
+                    documentationUrl: "rocketchat://default/room-1/guide.md",
+                    totalPages: 5,
+                    createdAt: new Date("2026-09-01T00:00:00.000Z"),
+                    lastIndexedAt: new Date("2026-09-01T00:00:00.000Z"),
+                    _count: { pagesIndexed: 5 },
+                },
+            ]);
+
+            const app = buildTestApp();
+            const res = await request(app)
+                .get("/api/v1/integrations/rocketchat/sources?workspaceId=default&roomId=room-1")
+                .set("Authorization", "Bearer test-secret-token");
+
+            expect(res.status).toBe(200);
+            expect(res.body.data.sources).toHaveLength(1);
+            expect(res.body.data.sources[0]).toEqual({
+                id: "source-1",
+                filename: "guide.md",
+                documentationUrl: "rocketchat://default/room-1/guide.md",
+                chunksCount: 5,
+                totalPages: 5,
+                createdAt: "2026-09-01T00:00:00.000Z",
+                lastIndexedAt: "2026-09-01T00:00:00.000Z",
+                status: "ACTIVE",
+            });
+            expect(chatSourceFindManyMock).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: expect.objectContaining({
+                        OR: expect.arrayContaining([
+                            expect.objectContaining({
+                                rocketchatWorkspaceId: "default",
+                                rocketchatRoomId: "room-1",
+                            }),
+                        ]),
+                    }),
+                }),
+            );
+        });
+    });
+
     describe("POST /sources/base64", () => {
         it("accepts base64 document and returns HTTP 202", async () => {
             userFindFirstMock.mockResolvedValue({ id: "user-1" });

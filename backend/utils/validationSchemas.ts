@@ -384,3 +384,13 @@ export const rocketchatUtilityCompletionSchema = {
         roomId: z.string().optional(),
     }),
 };
+
+export const rocketchatSourcesQuerySchema = {
+    query: z.object({
+        workspaceId: z.string().optional(),
+        roomId: z.string().optional(),
+        threadId: z.string().optional(),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+    }),
+};
+

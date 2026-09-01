@@ -526,13 +526,13 @@ git commit -m "fix: index rocketchat uploads into qdrant"
 - Modify: `backend/utils/validationSchemas.ts`
 - Test: `backend/tests/integration/rocketchat.integration.test.ts`
 
-- [ ] **Step 1: Run impact analysis**
+- [x] **Step 1: Run impact analysis**
 
 ```bash
 node .gitnexus/run.cjs impact -r RAGChat getStats --direction upstream --file backend/controllers/rocketchatIntegration.controller.ts
 ```
 
-- [ ] **Step 2: Add schema**
+- [x] **Step 2: Add schema**
 
 Add query schema:
 
@@ -547,7 +547,7 @@ export const rocketchatSourcesQuerySchema = {
 };
 ```
 
-- [ ] **Step 3: Add controller**
+- [x] **Step 3: Add controller**
 
 Route contract:
 
@@ -592,7 +592,7 @@ where: {
 
 - Legacy fallback for rows without scope: parse `documentationUrl` prefix `rocketchat://${workspaceId}/${roomId}/`.
 
-- [ ] **Step 4: Add route**
+- [x] **Step 4: Add route**
 
 ```ts
 rocketchatRouter
@@ -600,11 +600,11 @@ rocketchatRouter
     .get(validate(rocketchatSourcesQuerySchema), listSources);
 ```
 
-- [ ] **Step 5: Keep `/stats` as compatibility endpoint**
+- [x] **Step 5: Keep `/stats` as compatibility endpoint**
 
 Do not remove `/stats` yet. It is used by `BackendClient.listDocuments`.
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 ```bash
 cd backend
@@ -613,7 +613,7 @@ pnpm vitest run tests/integration/rocketchat.integration.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/routers/rocketchatIntegration.route.ts backend/controllers/rocketchatIntegration.controller.ts backend/utils/validationSchemas.ts backend/tests/integration/rocketchat.integration.test.ts

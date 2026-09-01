@@ -4,12 +4,14 @@ import { verifyIntegrationToken } from "../middlewares/integrationAuth.middlewar
 import {
     rocketchatAsyncMessageSchema,
     rocketchatStatsSchema,
+    rocketchatSourcesQuerySchema,
     rocketchatBase64SourceSchema,
     rocketchatUtilityCompletionSchema,
 } from "../utils/validationSchemas.js";
 import {
     handleAsyncMessage,
     getStats,
+    listSources,
     handleBase64Source,
     handleUtilityCompletion,
 } from "../controllers/rocketchatIntegration.controller.js";
@@ -24,6 +26,10 @@ rocketchatRouter
     .post(validate(rocketchatAsyncMessageSchema), handleAsyncMessage);
 
 rocketchatRouter.route("/stats").get(validate(rocketchatStatsSchema), getStats);
+
+rocketchatRouter
+    .route("/sources")
+    .get(validate(rocketchatSourcesQuerySchema), listSources);
 
 rocketchatRouter
     .route("/sources/base64")

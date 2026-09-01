@@ -445,6 +445,97 @@ export const getStats = asyncHandler(async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/v1/integrations/rocketchat/sources
+ */
+export const listSources = asyncHandler(async (req: Request, res: Response) => {
+    const {
+        workspaceId = "default",
+        roomId,
+        threadId,
+        limit = 50,
+    } = req.query as any;
+
+    const parsedLimit = Number(limit) || 50;
+
+    let whereClause: any = {};
+
+    if (roomId) {
+        whereClause = {
+            OR: [
+                {
+                    rocketchatWorkspaceId: workspaceId || "default",
+                    rocketchatRoomId: roomId,
+                    ...(threadId
+                        ? {
+                              OR: [
+                                  { rocketchatThreadId: threadId },
+                                  { rocketchatThreadId: null },
+                              ],
+                          }
+                        : {}),
+                },
+                {
+                    rocketchatRoomId: null,
+                    documentationUrl: {
+                        startsWith: `rocketchat://${workspaceId || "default"}/${roomId}/`,
+                    },
+                },
+            ],
+        };
+    } else if (workspaceId) {
+        whereClause = {
+            OR: [
+                { rocketchatWorkspaceId: workspaceId },
+                {
+                    documentationUrl: {
+                        startsWith: `rocketchat://${workspaceId}/`,
+                    },
+                },
+            ],
+        };
+    }
+
+    const sources = await prisma.chatSource.findMany({
+        where: whereClause,
+        orderBy: { createdAt: "desc" },
+        take: parsedLimit,
+        select: {
+            id: true,
+            heading: true,
+            documentationUrl: true,
+            totalPages: true,
+            createdAt: true,
+            lastIndexedAt: true,
+            _count: {
+                select: { pagesIndexed: true },
+            },
+        },
+    });
+
+    const formattedSources = sources.map((s) => {
+        const chunksCount = s._count?.pagesIndexed || s.totalPages || 0;
+        return {
+            id: s.id,
+            filename: s.heading || s.documentationUrl || "Document",
+            documentationUrl: s.documentationUrl,
+            chunksCount,
+            totalPages: s.totalPages || chunksCount,
+            createdAt: s.createdAt ? s.createdAt.toISOString() : undefined,
+            lastIndexedAt: s.lastIndexedAt ? s.lastIndexedAt.toISOString() : undefined,
+            status: chunksCount > 0 ? "ACTIVE" : "EMPTY",
+        };
+    });
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            { sources: formattedSources },
+            "Sources retrieved successfully",
+        ),
+    );
+});
+
+/**
  * POST /api/v1/integrations/rocketchat/sources/base64
  */
 export const handleBase64Source = asyncHandler(async (req: Request, res: Response) => {
