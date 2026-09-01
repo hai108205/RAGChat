@@ -1,6 +1,8 @@
 import { IModify, IRead } from '@rocket.chat/apps-engine/definition/accessors';
 import { IMessageAttachment } from '@rocket.chat/apps-engine/definition/messages';
 import { IRoom } from '@rocket.chat/apps-engine/definition/rooms';
+import { BlockBuilder, IBlock } from '@rocket.chat/apps-engine/definition/uikit';
+import { LayoutBlock } from '@rocket.chat/ui-kit';
 import { asNonEmptyString } from './Validator';
 
 /**
@@ -149,6 +151,37 @@ export async function sendNotification(
         .setGroupable(false);
 
     await modify.getNotifier().notifyUser(user, builder.getMessage());
+}
+
+/**
+ * Sends a message with UIKit blocks to a room.
+ */
+export async function sendMessageWithBlocks(
+    read: IRead,
+    modify: IModify,
+    room: IRoom | unknown,
+    text: string,
+    blocks: BlockBuilder | Array<IBlock | LayoutBlock>,
+    threadId?: string,
+): Promise<void> {
+    const appUser = await read.getUserReader().getAppUser();
+    if (!appUser) {
+        return;
+    }
+
+    const safeText = asNonEmptyString(text, '...');
+    const builder = modify.getCreator().startMessage()
+        .setRoom(room as IRoom)
+        .setSender(appUser)
+        .setText(safeText)
+        .setBlocks(blocks)
+        .setGroupable(false);
+
+    if (threadId) {
+        builder.setThreadId(threadId);
+    }
+
+    await modify.getCreator().finish(builder);
 }
 
 

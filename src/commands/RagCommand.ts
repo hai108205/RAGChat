@@ -9,7 +9,7 @@ import {
     SlashCommandContext,
 } from '@rocket.chat/apps-engine/definition/slashcommands';
 import { BackendClient } from '../lib/BackendClient';
-import { sendMessage } from '../utils/MessageHelper';
+import { sendMessage, sendMessageWithBlocks } from '../utils/MessageHelper';
 import { COMMANDS } from '../constants/Commands';
 import { ERRORS } from '../constants/Errors';
 
@@ -62,14 +62,40 @@ export class RagCommand implements ISlashCommand {
                     return;
                 }
 
-                let messageText = `📚 *Knowledge Base* (${sources.length} tài liệu)\n\n`;
+                const blockBuilder = modify.getCreator().getBlockBuilder();
+                blockBuilder.addSectionBlock({
+                    text: blockBuilder.newMarkdownTextObject(`📚 *Knowledge Base* (${sources.length} tài liệu trong phòng này):`),
+                });
+                blockBuilder.addDividerBlock();
+
                 sources.forEach((doc, idx) => {
                     const chunks = doc.chunksCount ?? doc.totalPages ?? 0;
-                    const date = doc.lastIndexedAt ? doc.lastIndexedAt.slice(0, 10) : doc.createdAt ? doc.createdAt.slice(0, 10) : 'N/A';
-                    messageText += `${idx + 1}. *${doc.filename}*\n   • Chunks: ${chunks}\n   • Status: \`${doc.status}\`\n   • Last indexed: ${date}\n\n`;
+                    const date = doc.lastIndexedAt
+                        ? doc.lastIndexedAt.slice(0, 10)
+                        : doc.createdAt
+                            ? doc.createdAt.slice(0, 10)
+                            : 'N/A';
+
+                    blockBuilder.addSectionBlock({
+                        text: blockBuilder.newMarkdownTextObject(
+                            `*${idx + 1}. ${doc.filename}*\n• Chunks: ${chunks} | Status: \`${doc.status}\` | Date: ${date}`,
+                        ),
+                        accessory: blockBuilder.newButtonElement({
+                            actionId: `delete_source:${doc.id}`,
+                            text: blockBuilder.newPlainTextObject('🗑️ Xoá'),
+                            value: doc.id,
+                        }),
+                    });
                 });
 
-                await sendMessage(read, modify, room, messageText.trim(), undefined, threadId);
+                await sendMessageWithBlocks(
+                    read,
+                    modify,
+                    room,
+                    `📚 Knowledge Base (${sources.length} tài liệu)`,
+                    blockBuilder,
+                    threadId,
+                );
             } catch (error: unknown) {
                 const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
                 await sendMessage(read, modify, room, `❌ Lỗi khi tải danh sách tài liệu: ${message}`, undefined, threadId);

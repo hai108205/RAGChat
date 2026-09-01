@@ -541,19 +541,23 @@ export const listSources = asyncHandler(async (req: Request, res: Response) => {
  * DELETE /api/v1/integrations/rocketchat/sources/:id
  */
 export const deleteSource = asyncHandler(async (req: Request, res: Response) => {
-    const { id } = req.params;
+    const sourceId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const {
         workspaceId = "default",
         roomId,
         mode = "room",
     } = req.query as any;
 
+    if (!sourceId) {
+        throw new ApiError(400, "Source ID is required");
+    }
+
     if (mode === "room" && (!roomId || !workspaceId)) {
         throw new ApiError(400, "workspaceId and roomId are required for room-scoped source deletion");
     }
 
     const source = await prisma.chatSource.findUnique({
-        where: { id },
+        where: { id: sourceId },
     });
 
     if (!source) {
