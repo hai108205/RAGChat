@@ -100,11 +100,20 @@ export class MentionHandler implements IPostMessageSent {
 
             const settings = read.getEnvironmentReader().getSettings();
             const maxHistory = readMaxHistory(await settings.getValueById('max-history'));
+            let workspaceId = 'default';
+            try {
+                const wsSetting = await settings.getValueById('workspace-id');
+                if (typeof wsSetting === 'string' && wsSetting.trim()) {
+                    workspaceId = wsSetting.trim();
+                }
+            } catch {
+                // Default workspace
+            }
 
             const history = await sessionStore.getHistory(message.sender.id, message.room.id, message.threadId, maxHistory);
             const requestId = `mention-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-            // 4. Enqueue async job to ARQ worker — results return via CallbackEndpoint
+            // 4. Enqueue async job to backend — results return via CallbackEndpoint
             await client.askAsync(
                 question,
                 message.sender.id,
@@ -113,6 +122,7 @@ export class MentionHandler implements IPostMessageSent {
                 placeholderId,
                 history,
                 requestId,
+                workspaceId,
             );
         } catch (error: unknown) {
             // 5. Fallback error handling
@@ -166,7 +176,17 @@ export class MentionHandler implements IPostMessageSent {
             case BOT_SUB_COMMANDS.STATS: {
                 try {
                     const client = new BackendClient(http, read);
-                    const documents = await client.listDocuments();
+                    const settings = read.getEnvironmentReader().getSettings();
+                    let workspaceId = 'default';
+                    try {
+                        const wsSetting = await settings.getValueById('workspace-id');
+                        if (typeof wsSetting === 'string' && wsSetting.trim()) {
+                            workspaceId = wsSetting.trim();
+                        }
+                    } catch {
+                        // Default workspace
+                    }
+                    const documents = await client.listDocuments(workspaceId, message.room.id, message.threadId);
                     await sendMessage(read, modify, message.room, Formatter.formatStats(documents), undefined, message.threadId);
                 } catch (error: unknown) {
                     const errMsg = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
@@ -225,4 +245,3 @@ export class MentionHandler implements IPostMessageSent {
         return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 }
-

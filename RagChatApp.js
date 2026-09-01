@@ -58,14 +58,17 @@ class RagChatApp extends App_1.App {
         const settings = environment.getSettings();
         const backendUrl = await settings.getValueById('backend-url');
         if (!backendUrl || typeof backendUrl !== 'string' || !backendUrl.trim()) {
-            this.getLogger().error('Backend URL is not configured — cannot enable app');
+            this.getLogger().error('Backend URL is not configured — cannot enable RAGChat app');
             return false;
         }
-        this.getLogger().info('RAGChat App enabled');
+        this.getLogger().info('RAGChat App enabled successfully');
         return true;
     }
     async onDisable(_configurationModify) {
         this.getLogger().info('RAGChat App disabled');
+    }
+    async onUninstall(_context, _read, _http, _persistence, _modify) {
+        this.getLogger().info('RAGChat App uninstalled');
     }
     async executePostMessageSentToBot(message, read, http, persistence, modify) {
         await this.getBotHandler().executePostMessageSentToBot(message, read, http, persistence, modify);

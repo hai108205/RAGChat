@@ -22,14 +22,13 @@ import { asNonEmptyString } from '../utils/Validator';
 const processedRequests = new Set<string>();
 
 /**
- * Webhook callback REST API endpoint for the Python RAG backend.
+ * Webhook callback REST API endpoint for the Node.js RAG backend.
  *
  * Route: POST /api/apps/public/8a800b09-3cc1-4bc1-8dbf-12592fc223eb/callback
  *
  * Architecture Role:
- * The Python backend uses asynchronous background workers (ARQ/Redis) to process
- * heavy RAG operations (document parsing, chunking, embedding generation, LLM streaming).
- * Once a job finishes or fails, the backend triggers this webhook callback.
+ * The backend processes heavy RAG operations (document parsing, chunking, embedding generation, LLM streaming)
+ * asynchronously in background workers. Once a job finishes or fails, the backend triggers this webhook callback.
  *
  * Supported Events:
  * - `chat_completed`: Upserts the original placeholder message with final LLM answer & citations,
@@ -42,7 +41,7 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
     public path = 'callback';
 
     /**
-     * Handles incoming POST webhook notifications from Python backend.
+     * Handles incoming POST webhook notifications from backend.
      */
     public async post(
         request: IApiRequest,
@@ -56,8 +55,7 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
         const body = request.content as Record<string, unknown>;
 
         // 1. Authentication check:
-        // Validate the shared API key if configured on the app settings.
-        // Backend sends `Authorization: Bearer <api_key>`.
+        // Validate the shared integration token (or legacy api-key) if configured.
         if (!(await this.authorize(request, read))) {
             logger.warn('Rejected unauthenticated callback from backend');
             return {
@@ -112,7 +110,21 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                     const threadId = body.thread_id as string | undefined;
                     const query = body.query as string | undefined;
                     const answer = asNonEmptyString(body.answer, 'Không nhận được câu trả lời.');
-                    const sources = (body.sources as CitationSource[]) || [];
+                    const rawSources = (body.sources as Array<Record<string, unknown>>) || [];
+
+                    // Normalize sources from backend
+                    const sources: CitationSource[] = rawSources.map((s) => {
+                        let relevance = typeof s.relevance === 'number' ? s.relevance : 0;
+                        if (typeof s.score === 'number' && !s.relevance) {
+                            relevance = (s.score as number) > 1 ? (s.score as number) / 100 : (s.score as number);
+                        }
+                        return {
+                            title: (s.title as string) || (s.heading as string) || 'Document',
+                            snippet: (s.snippet as string) || (s.chunkText as string) || (s.body as string) || '',
+                            pageUrl: (s.pageUrl as string) || (s.url as string) || '',
+                            relevance: isNaN(relevance) ? 0 : relevance,
+                        };
+                    });
 
                     // Check if citations are enabled by administrator
                     const enableCitations = readBoolean(await settings.getValueById('enable-citations'));
@@ -162,21 +174,25 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                 }
 
                 case 'indexing_complete': {
-                    const docName = body.document_name as string || 'Unknown';
-                    const chunksCount = body.chunks_count as number || 0;
+                    const docName = (body.document_name as string) || (body.filename as string) || 'Unknown';
+                    const chunksCount = (body.chunks_count as number) || 0;
                     await sendMessage(
                         read, modify, room,
                         `✅ **Document Indexed:** \`${docName}\` (${chunksCount} chunks)`,
+                        undefined,
+                        body.thread_id as string | undefined,
                     );
                     break;
                 }
 
                 case 'indexing_failed': {
-                    const docName = body.document_name as string || 'Unknown';
-                    const error = body.error as string || 'Unknown error';
+                    const docName = (body.document_name as string) || (body.filename as string) || 'Unknown';
+                    const error = (body.error as string) || 'Unknown error';
                     await sendMessage(
                         read, modify, room,
                         `❌ **Indexing Failed:** \`${docName}\` — ${error}`,
+                        undefined,
+                        body.thread_id as string | undefined,
                     );
                     break;
                 }
@@ -233,20 +249,35 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
     }
 
     /**
-     * Validates the incoming Authorization Bearer token against the configured `api-key` setting.
-     * When no `api-key` is configured on the app, authentication is bypassed for development ease.
+     * Validates the incoming Authorization Bearer token against `integration-token` or `api-key`.
      */
     private async authorize(request: IApiRequest, read: IRead): Promise<boolean> {
         const settings = read.getEnvironmentReader().getSettings();
-        const expectedKey = await settings.getValueById('api-key');
-        const configured = typeof expectedKey === 'string' && expectedKey.length > 0;
 
-        if (!configured) {
+        let expectedToken = '';
+        try {
+            const intToken = await settings.getValueById('integration-token');
+            if (typeof intToken === 'string' && intToken.trim().length > 0) {
+                expectedToken = intToken.trim();
+            }
+        } catch {
+            // Setting might not exist yet
+        }
+
+        if (!expectedToken) {
+            const apiKey = await settings.getValueById('api-key');
+            if (typeof apiKey === 'string' && apiKey.trim().length > 0) {
+                expectedToken = apiKey.trim();
+            }
+        }
+
+        // When no token is configured on the app, allow in development mode
+        if (!expectedToken) {
             return true;
         }
 
         const headers = request.headers || {};
         const authHeader = headers['Authorization'] ?? headers['authorization'];
-        return typeof authHeader === 'string' && authHeader === `Bearer ${expectedKey}`;
+        return typeof authHeader === 'string' && authHeader === `Bearer ${expectedToken}`;
     }
-}
+}

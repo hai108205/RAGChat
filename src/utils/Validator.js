@@ -1,6 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Validator = void 0;
+exports.asNonEmptyString = asNonEmptyString;
+function asNonEmptyString(value, fallback) {
+    return typeof value === 'string' && value.trim() ? value : fallback;
+}
 class Validator {
     static isValidUrl(url) {
         try {
@@ -13,6 +17,9 @@ class Validator {
     }
     static isNonEmptyString(value) {
         return typeof value === 'string' && value.trim().length > 0;
+    }
+    static asNonEmptyString(value, fallback) {
+        return asNonEmptyString(value, fallback);
     }
     static sanitizeInput(input) {
         return input.trim().slice(0, 4000);

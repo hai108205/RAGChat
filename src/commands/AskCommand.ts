@@ -25,9 +25,9 @@ import { COMMANDS } from '../constants/Commands';
  * generation can exceed this budget (e.g. 5-20s), AskCommand uses an asynchronous
  * enqueue pattern:
  * 1. Posts an instant placeholder message ('Đang tra cứu tài liệu...').
- * 2. Enqueues the chat task to the Python backend ARQ worker queue (returns HTTP 202 in <1s).
+ * 2. Enqueues the chat task to the Node.js backend integration queue (returns HTTP 202 in <1s).
  * 3. Command finishes immediately, safely releasing the Deno execution thread.
- * 4. The worker processes the query and notifies CallbackEndpoint.ts when done to upsert the placeholder.
+ * 4. The backend processes the query and notifies CallbackEndpoint.ts when done to upsert the placeholder.
  */
 export class AskCommand implements ISlashCommand {
     public command = COMMANDS.ASK;
@@ -67,14 +67,32 @@ export class AskCommand implements ISlashCommand {
 
             const settings = read.getEnvironmentReader().getSettings();
             const maxHistory = readMaxHistory(await settings.getValueById('max-history'));
+            let workspaceId = 'default';
+            try {
+                const wsSetting = await settings.getValueById('workspace-id');
+                if (typeof wsSetting === 'string' && wsSetting.trim()) {
+                    workspaceId = wsSetting.trim();
+                }
+            } catch {
+                // Default workspace
+            }
 
             const history = await sessionStore.getHistory(sender.id, room.id, threadId, maxHistory);
             const requestId = `ask-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-            // Enqueue async job to backend.
+            // Enqueue async job to Node backend.
             // Executor terminates immediately in < 2 seconds, avoiding Rocket.Chat 10s Deno timeout.
-            // ARQ worker processes the query and updates the placeholder via CallbackEndpoint.
-            await client.askAsync(query, sender.id, room.id, threadId, placeholderId, history, requestId);
+            // Backend processes the query and updates the placeholder via CallbackEndpoint.
+            await client.askAsync(
+                query,
+                sender.id,
+                room.id,
+                threadId,
+                placeholderId,
+                history,
+                requestId,
+                workspaceId,
+            );
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             if (placeholderId) {

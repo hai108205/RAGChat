@@ -118,7 +118,7 @@ export class BotMessageHandler implements IPostMessageSentToBot {
     }
 
     /**
-     * Fetches and displays knowledge base indexing statistics.
+     * Fetches and displays knowledge base indexing statistics from Node backend.
      */
     private async handleStats(
         message: IMessage,
@@ -128,7 +128,18 @@ export class BotMessageHandler implements IPostMessageSentToBot {
     ): Promise<void> {
         try {
             const client = new BackendClient(http, read);
-            const documents = await client.listDocuments();
+            const settings = read.getEnvironmentReader().getSettings();
+            let workspaceId = 'default';
+            try {
+                const wsSetting = await settings.getValueById('workspace-id');
+                if (typeof wsSetting === 'string' && wsSetting.trim()) {
+                    workspaceId = wsSetting.trim();
+                }
+            } catch {
+                // Default workspace
+            }
+
+            const documents = await client.listDocuments(workspaceId, message.room.id, message.threadId);
             await sendMessage(read, modify, message.room, Formatter.formatStats(documents), undefined, message.threadId);
         } catch (error: unknown) {
             const errMsg = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
@@ -138,7 +149,7 @@ export class BotMessageHandler implements IPostMessageSentToBot {
 
     /**
      * Handles regular text questions sent directly to the bot in DM.
-     * Uses the async ARQ job pattern to guarantee instant response and avoid Deno runtime timeouts.
+     * Uses the async integration job pattern to guarantee instant response and avoid Deno runtime timeouts.
      */
     private async handleQuestion(
         text: string,
@@ -161,11 +172,20 @@ export class BotMessageHandler implements IPostMessageSentToBot {
 
             const settings = read.getEnvironmentReader().getSettings();
             const maxHistory = readMaxHistory(await settings.getValueById('max-history'));
+            let workspaceId = 'default';
+            try {
+                const wsSetting = await settings.getValueById('workspace-id');
+                if (typeof wsSetting === 'string' && wsSetting.trim()) {
+                    workspaceId = wsSetting.trim();
+                }
+            } catch {
+                // Default workspace
+            }
 
             const history = await sessionStore.getHistory(message.sender.id, message.room.id, message.threadId, maxHistory);
             const requestId = `dm-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-            // 2. Enqueue async job to ARQ worker — results return via CallbackEndpoint
+            // 2. Enqueue async job to backend — results return via CallbackEndpoint
             await client.askAsync(
                 text,
                 message.sender.id,
@@ -174,6 +194,7 @@ export class BotMessageHandler implements IPostMessageSentToBot {
                 placeholderId,
                 history,
                 requestId,
+                workspaceId,
             );
         } catch (error: unknown) {
             // 3. Fallback error handling
@@ -190,4 +211,3 @@ export class BotMessageHandler implements IPostMessageSentToBot {
         }
     }
 }
-

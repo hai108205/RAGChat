@@ -31,30 +31,31 @@ class AskCommand {
             const sessionStore = new sessionStore_1.SessionStore(read, persis);
             const settings = read.getEnvironmentReader().getSettings();
             const maxHistory = (0, SettingReader_1.readMaxHistory)(await settings.getValueById('max-history'));
+            let workspaceId = 'default';
+            try {
+                const wsSetting = await settings.getValueById('workspace-id');
+                if (typeof wsSetting === 'string' && wsSetting.trim()) {
+                    workspaceId = wsSetting.trim();
+                }
+            }
+            catch (_a) {
+            }
             const history = await sessionStore.getHistory(sender.id, room.id, threadId, maxHistory);
-            const response = await client.ask(query, sender.id, room.id, history);
-            await sessionStore.addMessages(sender.id, room.id, threadId, [
-                { role: 'user', content: query, timestamp: Date.now() },
-                { role: 'assistant', content: response.answer, timestamp: Date.now() },
-            ], maxHistory);
-            const enableCitations = (0, SettingReader_1.readBoolean)(await settings.getValueById('enable-citations'));
-            const attachment = enableCitations
-                ? Formatter_1.Formatter.formatSources(response.sources)
-                : undefined;
-            if (placeholderId) {
-                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, response.answer, attachment);
-            }
-            else {
-                await (0, MessageHelper_1.sendMessage)(read, modify, room, response.answer, attachment, threadId);
-            }
+            const requestId = `ask-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+            await client.askAsync(query, sender.id, room.id, threadId, placeholderId, history, requestId, workspaceId);
         }
         catch (error) {
             const message = error instanceof Error ? error.message : Errors_1.ERRORS.BACKEND_UNAVAILABLE;
             if (placeholderId) {
-                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, message, undefined);
+                try {
+                    await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, message, undefined);
+                }
+                catch (_b) {
+                    await (0, MessageHelper_1.sendMessage)(read, modify, room, message, undefined, threadId);
+                }
             }
             else {
-                await (0, MessageHelper_1.sendMessage)(read, modify, room, message);
+                await (0, MessageHelper_1.sendMessage)(read, modify, room, message, undefined, threadId);
             }
         }
     }

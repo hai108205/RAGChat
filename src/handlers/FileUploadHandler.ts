@@ -11,14 +11,14 @@ import { sendMessage } from '../utils/MessageHelper';
 const SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.pptx', '.csv', '.xlsx', '.html'];
 
 /**
- * Intercepts uploaded files and forwards supported documents to the RAG backend for indexing.
+ * Intercepts uploaded files and forwards supported documents to the Node.js RAG backend for indexing.
  *
  * Implements `IPreFileUpload`.
  *
  * Behavior:
  * 1. Checks file extension against `SUPPORTED_EXTENSIONS`.
  * 2. Encodes document `Buffer` to base64.
- * 3. Dispatches indexing request asynchronously to `/api/documents/base64`.
+ * 3. Dispatches indexing request asynchronously to `/api/v1/integrations/rocketchat/sources/base64`.
  * 4. Non-blocking: returns normally to allow the Rocket.Chat file upload to complete seamlessly.
  *    The backend notifies the room when indexing succeeds or fails via the `CallbackEndpoint`.
  */
@@ -42,12 +42,27 @@ export class FileUploadHandler implements IPreFileUpload {
 
         try {
             const client = new BackendClient(http, read);
-            await client.post('/api/documents/base64', {
+            const settings = read.getEnvironmentReader().getSettings();
+            let workspaceId = 'default';
+            try {
+                const wsSetting = await settings.getValueById('workspace-id');
+                if (typeof wsSetting === 'string' && wsSetting.trim()) {
+                    workspaceId = wsSetting.trim();
+                }
+            } catch {
+                // Default workspace
+            }
+
+            const requestId = `upload-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+            await client.uploadBase64({
+                workspaceId,
+                rocketUserId: file.userId || '',
+                roomId: file.rid || '',
                 filename: file.name,
-                content_base64: content.toString('base64'),
-                content_type: file.type || 'application/octet-stream',
-                user_id: file.userId || '',
-                room_id: file.rid || '',
+                contentBase64: content.toString('base64'),
+                contentType: file.type || 'application/octet-stream',
+                requestId,
             });
         } catch (error: unknown) {
             // Surface failure if backend is unreachable so user is aware indexing did not queue
@@ -70,4 +85,3 @@ export class FileUploadHandler implements IPreFileUpload {
         return index === -1 ? '' : filename.slice(index).toLowerCase();
     }
 }
-

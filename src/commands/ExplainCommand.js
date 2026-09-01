@@ -37,7 +37,12 @@ class ExplainCommand {
         catch (error) {
             const message = error instanceof Error ? error.message : Errors_1.ERRORS.BACKEND_UNAVAILABLE;
             if (placeholderId) {
-                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, message);
+                try {
+                    await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, message);
+                }
+                catch (_a) {
+                    await (0, MessageHelper_1.sendMessage)(read, modify, room, message, undefined, threadId);
+                }
             }
             else {
                 await (0, MessageHelper_1.sendMessage)(read, modify, room, message, undefined, threadId);

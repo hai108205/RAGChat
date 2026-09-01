@@ -44,27 +44,28 @@ class MentionHandler {
             const sessionStore = new sessionStore_1.SessionStore(read, persistence);
             const settings = read.getEnvironmentReader().getSettings();
             const maxHistory = (0, SettingReader_1.readMaxHistory)(await settings.getValueById('max-history'));
+            let workspaceId = 'default';
+            try {
+                const wsSetting = await settings.getValueById('workspace-id');
+                if (typeof wsSetting === 'string' && wsSetting.trim()) {
+                    workspaceId = wsSetting.trim();
+                }
+            }
+            catch (_a) {
+            }
             const history = await sessionStore.getHistory(message.sender.id, message.room.id, message.threadId, maxHistory);
-            const response = await client.ask(question, message.sender.id, message.room.id, history);
-            await sessionStore.addMessages(message.sender.id, message.room.id, message.threadId, [
-                { role: 'user', content: question, timestamp: Date.now() },
-                { role: 'assistant', content: response.answer, timestamp: Date.now() },
-            ], maxHistory);
-            const enableCitations = (0, SettingReader_1.readBoolean)(await settings.getValueById('enable-citations'));
-            const attachment = enableCitations
-                ? Formatter_1.Formatter.formatSources(response.sources)
-                : undefined;
-            if (placeholderId) {
-                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, response.answer, attachment);
-            }
-            else {
-                await (0, MessageHelper_1.sendMessage)(read, modify, message.room, response.answer, attachment, message.threadId);
-            }
+            const requestId = `mention-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+            await client.askAsync(question, message.sender.id, message.room.id, message.threadId, placeholderId, history, requestId, workspaceId);
         }
         catch (error) {
             const errMsg = error instanceof Error ? error.message : Errors_1.ERRORS.BACKEND_UNAVAILABLE;
             if (placeholderId) {
-                await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, errMsg, undefined);
+                try {
+                    await (0, MessageHelper_1.updateMessage)(placeholderId, read, modify, errMsg, undefined);
+                }
+                catch (_b) {
+                    await (0, MessageHelper_1.sendMessage)(read, modify, message.room, errMsg, undefined, message.threadId);
+                }
             }
             else {
                 await (0, MessageHelper_1.sendMessage)(read, modify, message.room, errMsg, undefined, message.threadId);
@@ -96,7 +97,17 @@ class MentionHandler {
             case Commands_1.BOT_SUB_COMMANDS.STATS: {
                 try {
                     const client = new BackendClient_1.BackendClient(http, read);
-                    const documents = await client.listDocuments();
+                    const settings = read.getEnvironmentReader().getSettings();
+                    let workspaceId = 'default';
+                    try {
+                        const wsSetting = await settings.getValueById('workspace-id');
+                        if (typeof wsSetting === 'string' && wsSetting.trim()) {
+                            workspaceId = wsSetting.trim();
+                        }
+                    }
+                    catch (_a) {
+                    }
+                    const documents = await client.listDocuments(workspaceId, message.room.id, message.threadId);
                     await (0, MessageHelper_1.sendMessage)(read, modify, message.room, Formatter_1.Formatter.formatStats(documents), undefined, message.threadId);
                 }
                 catch (error) {

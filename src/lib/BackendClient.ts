@@ -7,6 +7,17 @@ import { ERRORS } from '../constants/Errors';
 import { ChatMessage } from '../persistence/sessionStore';
 import { CitationSource } from '../utils/Formatter';
 import { Validator } from '../utils/Validator';
+import {
+    AsyncMessagePayload,
+    AsyncMessageResponseData,
+    BackendResponseEnvelope,
+    Base64UploadPayload,
+    Base64UploadResponseData,
+    IntegrationStatsData,
+    SearchResult,
+    StatsDocument,
+    UtilityCompletionData,
+} from './BackendTypes';
 
 export interface BackendAskResponse {
     answer: string;
@@ -14,22 +25,19 @@ export interface BackendAskResponse {
     model: string;
 }
 
-export interface SearchResult {
-    title: string;
-    snippet: string;
-    relevance: number;
-    metadata: Record<string, unknown>;
-}
+export { SearchResult } from './BackendTypes';
 
 /**
- * HTTP Client wrapper for communicating with the Python FastAPI RAG backend.
+ * HTTP Client wrapper for communicating with the Node.js/Express RAG backend.
  *
  * Responsibilities:
- * - Dynamic base URL and API key resolution from App Settings.
- * - Header generation (Content-Type, Authorization: Bearer).
- * - Synchronous and Asynchronous Q&A operations (`ask`, `askAsync`).
- * - Document search, summarization, explanation, and translation.
- * - HTTP status code assertion (treating non-2xx as error and parsing detail).
+ * - Dynamic base URL and Bearer integration token resolution from App Settings.
+ * - Header generation (Content-Type, Authorization: Bearer <token>).
+ * - Asynchronous Q&A operations mapped to `/api/v1/integrations/rocketchat/messages/async`.
+ * - Integration stats mapped to `/api/v1/integrations/rocketchat/stats`.
+ * - Base64 document indexing mapped to `/api/v1/integrations/rocketchat/sources/base64`.
+ * - Utility text operations (summarize, explain, translate, search) mapped to `/api/v1/integrations/rocketchat/utilities/completion`.
+ * - Response envelope unwrapping and detailed error extraction.
  */
 export class BackendClient {
     constructor(
@@ -38,39 +46,9 @@ export class BackendClient {
     ) {}
 
     /**
-     * Synchronous Q&A request to `/api/chat`.
-     * Note: Prefer `askAsync` for user-facing commands to prevent Deno 10s execution timeout.
-     */
-    public async ask(
-        query: string,
-        userId: string,
-        roomId: string,
-        history?: ChatMessage[],
-    ): Promise<BackendAskResponse> {
-        try {
-            const response = await this.post('/api/chat', {
-                query,
-                user_id: userId,
-                room_id: roomId,
-                history: history || [],
-            });
-            const data = this.asData(response);
-
-            return {
-                answer: (data.answer as string) || 'No answer received.',
-                sources: (data.sources as CitationSource[]) || [],
-                model: (data.model as string) || 'unknown',
-            };
-        } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
-            throw new Error(message);
-        }
-    }
-
-    /**
-     * Enqueues an asynchronous RAG job to `/api/chat/async`.
+     * Enqueues an asynchronous RAG question answering job to the Node.js backend.
      *
-     * The backend returns HTTP 202 immediately (<1s). Once the ARQ worker completes
+     * Returns HTTP 202 immediately (<1s). Once the background worker completes
      * processing the query and generating the answer, it triggers `CallbackEndpoint.ts`
      * to update the placeholder message in the chat room.
      */
@@ -82,23 +60,31 @@ export class BackendClient {
         placeholderId?: string,
         history?: ChatMessage[],
         requestId?: string,
+        workspaceId?: string,
+        callbackUrl?: string,
     ): Promise<{ status: string; job_id: string; request_id: string }> {
-        const reqId = requestId || `req-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const reqId = requestId || `ask-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+        const payload: AsyncMessagePayload = {
+            workspaceId: workspaceId || 'default',
+            rocketUserId: userId,
+            roomId,
+            threadId: threadId || null,
+            placeholderId: placeholderId || null,
+            requestId: reqId,
+            query,
+            history: history || [],
+            callbackUrl,
+        };
+
         try {
-            const response = await this.post('/api/chat/async', {
-                query,
-                request_id: reqId,
-                user_id: userId,
-                room_id: roomId,
-                thread_id: threadId || null,
-                placeholder_id: placeholderId || null,
-                history: history || [],
-            });
-            const data = this.asData(response);
+            const response = await this.post('/api/v1/integrations/rocketchat/messages/async', payload);
+            const data = this.extractData<AsyncMessageResponseData>(response);
+
             return {
-                status: (data.status as string) || 'accepted',
-                job_id: (data.job_id as string) || '',
-                request_id: (data.request_id as string) || reqId,
+                status: data?.status || 'accepted',
+                job_id: data?.jobId || data?.job_id || `job-${reqId}`,
+                request_id: data?.requestId || data?.request_id || reqId,
             };
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
@@ -107,24 +93,122 @@ export class BackendClient {
     }
 
     /**
-     * Executes semantic search across indexed document embeddings via `/api/search`.
+     * Retrieves knowledge base documents and statistics via `/api/v1/integrations/rocketchat/stats`.
+     */
+    public async listDocuments(
+        workspaceId?: string,
+        roomId?: string,
+        threadId?: string,
+    ): Promise<StatsDocument[]> {
+        try {
+            const queryParams: string[] = [];
+            if (workspaceId) queryParams.push(`workspaceId=${encodeURIComponent(workspaceId)}`);
+            if (roomId) queryParams.push(`roomId=${encodeURIComponent(roomId)}`);
+            if (threadId) queryParams.push(`threadId=${encodeURIComponent(threadId)}`);
+
+            const queryString = queryParams.length ? `?${queryParams.join('&')}` : '';
+            const response = await this.get(`/api/v1/integrations/rocketchat/stats${queryString}`);
+            const data = this.extractData<IntegrationStatsData>(response);
+
+            return data?.documents || [];
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+            throw new Error(message);
+        }
+    }
+
+    /**
+     * Uploads and indexes a base64 encoded document via `/api/v1/integrations/rocketchat/sources/base64`.
+     */
+    public async uploadBase64(
+        payload: Base64UploadPayload,
+    ): Promise<Base64UploadResponseData> {
+        try {
+            const response = await this.post('/api/v1/integrations/rocketchat/sources/base64', payload);
+            const data = this.extractData<Base64UploadResponseData>(response);
+
+            return {
+                status: data?.status || 'accepted',
+                sourceId: data?.sourceId,
+                jobId: data?.jobId,
+                requestId: data?.requestId || payload.requestId,
+            };
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+            throw new Error(message);
+        }
+    }
+
+    /**
+     * Summarizes text using the utility endpoint `/api/v1/integrations/rocketchat/utilities/completion`.
+     */
+    public async summarize(text: string): Promise<string> {
+        try {
+            const response = await this.post('/api/v1/integrations/rocketchat/utilities/completion', {
+                operation: 'summarize',
+                text,
+            });
+            const data = this.extractData<UtilityCompletionData>(response);
+            return data?.result || data?.summary || 'No summary generated.';
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+            throw new Error(message);
+        }
+    }
+
+    /**
+     * Explains a concept using the utility endpoint `/api/v1/integrations/rocketchat/utilities/completion`.
+     */
+    public async explain(concept: string): Promise<string> {
+        try {
+            const response = await this.post('/api/v1/integrations/rocketchat/utilities/completion', {
+                operation: 'explain',
+                concept,
+            });
+            const data = this.extractData<UtilityCompletionData>(response);
+            return data?.result || data?.explanation || 'No explanation generated.';
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+            throw new Error(message);
+        }
+    }
+
+    /**
+     * Translates text using the utility endpoint `/api/v1/integrations/rocketchat/utilities/completion`.
+     */
+    public async translate(text: string, targetLang: string = 'vi'): Promise<string> {
+        try {
+            const response = await this.post('/api/v1/integrations/rocketchat/utilities/completion', {
+                operation: 'translate',
+                text,
+                targetLang,
+            });
+            const data = this.extractData<UtilityCompletionData>(response);
+            return data?.result || data?.translation || 'No translation generated.';
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+            throw new Error(message);
+        }
+    }
+
+    /**
+     * Searches knowledge base documents via `/api/v1/integrations/rocketchat/utilities/completion`.
      */
     public async search(
         query: string,
         topK: number = 5,
-        userId?: string,
+        _userId?: string,
         roomId?: string,
     ): Promise<SearchResult[]> {
         try {
-            const response = await this.post('/api/search', {
+            const response = await this.post('/api/v1/integrations/rocketchat/utilities/completion', {
+                operation: 'search',
                 query,
-                top_k: topK,
-                user_id: userId,
-                room_id: roomId,
+                topK,
+                roomId,
             });
-            const data = this.asData(response);
-
-            return (data.results as SearchResult[]) || [];
+            const data = this.extractData<UtilityCompletionData>(response);
+            return data?.results || [];
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             throw new Error(message);
@@ -132,68 +216,28 @@ export class BackendClient {
     }
 
     /**
-     * Calls text summarization endpoint via `/api/summarize`.
+     * Synchronous ask fallback method.
      */
-    public async summarize(text: string): Promise<string> {
+    public async ask(
+        query: string,
+        userId: string,
+        roomId: string,
+        _history?: ChatMessage[],
+    ): Promise<BackendAskResponse> {
         try {
-            const response = await this.post('/api/summarize', { text });
-            return (this.asData(response).summary as string) || 'No summary generated.';
-        } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
-            throw new Error(message);
-        }
-    }
-
-    /**
-     * Calls concept explanation endpoint via `/api/explain`.
-     */
-    public async explain(concept: string): Promise<string> {
-        try {
-            const response = await this.post('/api/explain', { concept });
-            return (this.asData(response).explanation as string) || 'No explanation generated.';
-        } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
-            throw new Error(message);
-        }
-    }
-
-    /**
-     * Retrieves the list of indexed documents from `/api/documents`.
-     */
-    public async listDocuments(): Promise<Array<{
-        id: string;
-        filename: string;
-        chunks_count: number;
-        created_at?: string;
-    }>> {
-        try {
-            const response = await this.get('/api/documents');
-            const data = this.asData(response);
-            return (data.documents as Array<{
-                id: string;
-                filename: string;
-                chunks_count: number;
-                created_at?: string;
-            }>) || [];
-        } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
-            throw new Error(message);
-        }
-    }
-
-    /**
-     * Translates input text into the target language via `/api/translate`.
-     */
-    public async translate(
-        text: string,
-        targetLang: string = 'vi',
-    ): Promise<string> {
-        try {
-            const response = await this.post('/api/translate', {
-                text,
-                target_lang: targetLang,
+            const reqId = `sync-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            const response = await this.post('/api/v1/integrations/rocketchat/utilities/completion', {
+                operation: 'explain',
+                concept: query,
+                roomId,
             });
-            return (this.asData(response).translation as string) || 'No translation generated.';
+            const data = this.extractData<UtilityCompletionData>(response);
+
+            return {
+                answer: data?.result || data?.explanation || 'No answer received.',
+                sources: [],
+                model: 'node-backend',
+            };
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             throw new Error(message);
@@ -201,17 +245,39 @@ export class BackendClient {
     }
 
     /**
-     * Coerces response body to a plain Record object, preventing TypeError on missing payload.
+     * Unwraps data from standard `{ success, data, message, statusCode }` response envelopes.
      */
-    private asData(response: IHttpResponse): Record<string, unknown> {
-        const data = response.data;
-        return data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+    private extractData<T>(response: IHttpResponse): T {
+        const raw = response.data;
+        if (raw && typeof raw === 'object') {
+            const envelope = raw as BackendResponseEnvelope<T>;
+            if (envelope.data !== undefined) {
+                return envelope.data;
+            }
+            return raw as unknown as T;
+        }
+
+        if (response.content) {
+            try {
+                const parsed = JSON.parse(response.content);
+                if (parsed && typeof parsed === 'object') {
+                    if (parsed.data !== undefined) {
+                        return parsed.data as T;
+                    }
+                    return parsed as T;
+                }
+            } catch {
+                // Not JSON content
+            }
+        }
+
+        return {} as T;
     }
 
     /**
      * Resolves and validates the backend URL from app settings.
      */
-    private async getBackendUrl(): Promise<string> {
+    public async getBackendUrl(): Promise<string> {
         const settings = this.read.getEnvironmentReader().getSettings();
         const url = await settings.getValueById('backend-url');
 
@@ -223,12 +289,23 @@ export class BackendClient {
     }
 
     /**
-     * Resolves the API key from app settings.
+     * Resolves the integration authentication token from app settings.
+     * Checks `integration-token` first, falling back to legacy `api-key`.
      */
-    private async getApiKey(): Promise<string> {
+    public async getIntegrationToken(): Promise<string> {
         const settings = this.read.getEnvironmentReader().getSettings();
-        const key = await settings.getValueById('api-key');
-        return typeof key === 'string' ? key : '';
+
+        try {
+            const integrationToken = await settings.getValueById('integration-token');
+            if (typeof integrationToken === 'string' && integrationToken.trim().length > 0) {
+                return integrationToken.trim();
+            }
+        } catch {
+            // Setting might not be configured yet
+        }
+
+        const apiKey = await settings.getValueById('api-key');
+        return typeof apiKey === 'string' ? apiKey.trim() : '';
     }
 
     /**
@@ -238,9 +315,12 @@ export class BackendClient {
         path: string,
         data: unknown,
     ): Promise<IHttpResponse> {
-        const response = await this.http.post(`${await this.getBackendUrl()}${path}`, {
+        const url = `${await this.getBackendUrl()}${path}`;
+        const headers = await this.buildHeaders();
+
+        const response = await this.http.post(url, {
             data,
-            headers: await this.buildHeaders(),
+            headers,
             timeout: 60000,
         });
 
@@ -252,8 +332,11 @@ export class BackendClient {
      * Executes HTTP GET request to backend with headers and timeout.
      */
     public async get(path: string): Promise<IHttpResponse> {
-        const response = await this.http.get(`${await this.getBackendUrl()}${path}`, {
-            headers: await this.buildHeaders(),
+        const url = `${await this.getBackendUrl()}${path}`;
+        const headers = await this.buildHeaders();
+
+        const response = await this.http.get(url, {
+            headers,
             timeout: 60000,
         });
 
@@ -266,22 +349,39 @@ export class BackendClient {
      */
     private assertSuccess(response: IHttpResponse): void {
         if (response.statusCode < 200 || response.statusCode >= 300) {
-            let detail = '';
-            if (response.data && typeof response.data === 'object' && 'detail' in response.data) {
-                detail = String((response.data as { detail: unknown }).detail);
+            let errorDetail = '';
+
+            if (response.data && typeof response.data === 'object') {
+                const env = response.data as BackendResponseEnvelope;
+                if (env.message) {
+                    errorDetail = env.message;
+                } else if (env.detail) {
+                    errorDetail = env.detail;
+                } else if (env.error) {
+                    errorDetail = env.error;
+                } else if (Array.isArray(env.errors) && env.errors.length > 0) {
+                    errorDetail = env.errors
+                        .map((e) => (typeof e === 'object' && e !== null && 'message' in e ? e.message : String(e)))
+                        .join(', ');
+                }
             } else if (response.content) {
                 try {
                     const parsed = JSON.parse(response.content);
-                    if (parsed && typeof parsed === 'object' && parsed.detail) {
-                        detail = String(parsed.detail);
+                    if (parsed && typeof parsed === 'object') {
+                        errorDetail = parsed.message || parsed.detail || parsed.error || '';
+                        if (!errorDetail && Array.isArray(parsed.errors)) {
+                            errorDetail = parsed.errors.join(', ');
+                        }
                     }
                 } catch {
-                    // Not JSON content
+                    errorDetail = response.content.slice(0, 150);
                 }
             }
-            if (detail) {
-                throw new Error(`Backend error (${response.statusCode}): ${detail}`);
+
+            if (errorDetail) {
+                throw new Error(`Backend error (${response.statusCode}): ${errorDetail}`);
             }
+
             throw new Error(ERRORS.BACKEND_ERROR(response.statusCode));
         }
     }
@@ -294,12 +394,11 @@ export class BackendClient {
             'Content-Type': 'application/json',
         };
 
-        const apiKey = await this.getApiKey();
-        if (apiKey) {
-            headers['Authorization'] = `Bearer ${apiKey}`;
+        const token = await this.getIntegrationToken();
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
         }
 
         return headers;
     }
 }
-
