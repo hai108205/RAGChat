@@ -18,6 +18,7 @@ import {
     splitDocumentationContent,
 } from "../utils/ragUtilities.js";
 import { qdrant } from "../utils/ragClients.js";
+import { deleteQdrantCollectionSafe } from "../utils/qdrantCleanup.js";
 
 // In-memory LRU idempotency cache for fast deduplication
 const seenRequests = new Set<string>();
@@ -531,6 +532,82 @@ export const listSources = asyncHandler(async (req: Request, res: Response) => {
             200,
             { sources: formattedSources },
             "Sources retrieved successfully",
+        ),
+    );
+});
+
+/**
+ * DELETE /api/v1/integrations/rocketchat/sources/:id
+ */
+export const deleteSource = asyncHandler(async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const {
+        workspaceId = "default",
+        roomId,
+        mode = "room",
+    } = req.query as any;
+
+    if (mode === "room" && (!roomId || !workspaceId)) {
+        throw new ApiError(400, "workspaceId and roomId are required for room-scoped source deletion");
+    }
+
+    const source = await prisma.chatSource.findUnique({
+        where: { id },
+    });
+
+    if (!source) {
+        throw new ApiError(404, "Source not found");
+    }
+
+    if (mode === "room") {
+        const matchesExplicit =
+            source.rocketchatRoomId === roomId &&
+            (source.rocketchatWorkspaceId === workspaceId ||
+                (!source.rocketchatWorkspaceId && workspaceId === "default"));
+
+        const matchesLegacy =
+            !source.rocketchatRoomId &&
+            source.documentationUrl.startsWith(
+                `rocketchat://${workspaceId || "default"}/${roomId}/`,
+            );
+
+        if (!matchesExplicit && !matchesLegacy) {
+            throw new ApiError(403, "Source does not belong to the specified workspace and room");
+        }
+    }
+
+    let vectorsRemoved = false;
+    let qdrantResult: any = { deleted: false };
+
+    if (source.collectionName) {
+        const otherSourcesCount = await prisma.chatSource.count({
+            where: {
+                collectionName: source.collectionName,
+                id: { not: source.id },
+            },
+        });
+
+        if (otherSourcesCount === 0) {
+            const cleanupRes = await deleteQdrantCollectionSafe(source.collectionName);
+            qdrantResult = cleanupRes;
+            vectorsRemoved = cleanupRes.deleted;
+        }
+    }
+
+    await prisma.chatSource.delete({
+        where: { id: source.id },
+    });
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                id: source.id,
+                deleted: true,
+                vectorsRemoved,
+                qdrant: qdrantResult,
+            },
+            "Source deleted successfully",
         ),
     );
 });

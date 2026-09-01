@@ -5,6 +5,7 @@ import {
     rocketchatAsyncMessageSchema,
     rocketchatStatsSchema,
     rocketchatSourcesQuerySchema,
+    rocketchatDeleteSourceSchema,
     rocketchatBase64SourceSchema,
     rocketchatUtilityCompletionSchema,
 } from "../utils/validationSchemas.js";
@@ -12,6 +13,7 @@ import {
     handleAsyncMessage,
     getStats,
     listSources,
+    deleteSource,
     handleBase64Source,
     handleUtilityCompletion,
 } from "../controllers/rocketchatIntegration.controller.js";
@@ -30,6 +32,10 @@ rocketchatRouter.route("/stats").get(validate(rocketchatStatsSchema), getStats);
 rocketchatRouter
     .route("/sources")
     .get(validate(rocketchatSourcesQuerySchema), listSources);
+
+rocketchatRouter
+    .route("/sources/:id")
+    .delete(validate(rocketchatDeleteSourceSchema), deleteSource);
 
 rocketchatRouter
     .route("/sources/base64")

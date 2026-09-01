@@ -394,3 +394,21 @@ export const rocketchatSourcesQuerySchema = {
     }),
 };
 
+export const rocketchatSourceIdParamSchema = {
+    params: z.object({
+        id: z.string().uuid("Invalid source ID"),
+    }),
+};
+
+export const rocketchatDeleteSourceSchema = {
+    params: z.object({
+        id: z.string().uuid("Invalid source ID"),
+    }),
+    query: z.object({
+        workspaceId: z.string().optional(),
+        roomId: z.string().optional(),
+        mode: z.enum(["room", "global"]).default("room"),
+    }),
+};
+
+

@@ -631,7 +631,7 @@ git commit -m "feat: add rocketchat source listing api"
 - Modify: `backend/utils/validationSchemas.ts`
 - Test: `backend/tests/integration/rocketchat.integration.test.ts`
 
-- [ ] **Step 1: Run impact analysis**
+- [x] **Step 1: Run impact analysis**
 
 ```bash
 node .gitnexus/run.cjs impact -r RAGChat deleteQdrantCollectionSafe --direction upstream --file backend/utils/qdrantCleanup.ts
@@ -640,7 +640,7 @@ node .gitnexus/run.cjs impact -r RAGChat ChatSource --direction upstream
 
 If GitNexus reports HIGH/CRITICAL for schema/entity edits, stop and warn before implementation.
 
-- [ ] **Step 2: Add param schema**
+- [x] **Step 2: Add param schema**
 
 ```ts
 export const rocketchatSourceIdParamSchema = {
@@ -658,7 +658,7 @@ export const rocketchatDeleteSourceSchema = {
 };
 ```
 
-- [ ] **Step 3: Implement safe delete rules**
+- [x] **Step 3: Implement safe delete rules**
 
 Rules:
 
@@ -696,7 +696,7 @@ Response:
 }
 ```
 
-- [ ] **Step 4: Add tests**
+- [x] **Step 4: Add tests**
 
 Test cases:
 
@@ -707,7 +707,7 @@ Test cases:
 - `mode=room` rejects when `workspaceId` or `roomId` is missing.
 - Shared collection does not delete vectors if still referenced.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 ```bash
 cd backend
@@ -716,7 +716,7 @@ pnpm vitest run tests/integration/rocketchat.integration.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/routers/rocketchatIntegration.route.ts backend/controllers/rocketchatIntegration.controller.ts backend/utils/validationSchemas.ts backend/tests/integration/rocketchat.integration.test.ts

@@ -8,7 +8,10 @@ const chatFindFirstMock = vi.fn();
 const chatCreateMock = vi.fn();
 const chatUpdateMock = vi.fn();
 const chatSourceFindManyMock = vi.fn();
+const chatSourceFindUniqueMock = vi.fn();
 const chatSourceCreateMock = vi.fn();
+const chatSourceDeleteMock = vi.fn();
+const chatSourceCountMock = vi.fn();
 const documentPageCreateManyMock = vi.fn();
 const documentPageFindManyMock = vi.fn();
 const usageEventsAggregateMock = vi.fn();
@@ -88,7 +91,10 @@ vi.mock("../../utils/prismaClient.js", () => ({
         },
         chatSource: {
             findMany: (...args: any[]) => chatSourceFindManyMock(...args),
+            findUnique: (...args: any[]) => chatSourceFindUniqueMock(...args),
             create: (...args: any[]) => chatSourceCreateMock(...args),
+            delete: (...args: any[]) => chatSourceDeleteMock(...args),
+            count: (...args: any[]) => chatSourceCountMock(...args),
         },
         documentPage: {
             findMany: (...args: any[]) => documentPageFindManyMock(...args),
@@ -172,7 +178,10 @@ describe("Rocket.Chat Integration Router", () => {
         chatUpdateMock.mockReset();
         chatSourceFindManyMock.mockReset();
         chatSourceFindManyMock.mockResolvedValue([]);
+        chatSourceFindUniqueMock.mockReset();
         chatSourceCreateMock.mockReset();
+        chatSourceDeleteMock.mockReset();
+        chatSourceCountMock.mockReset().mockResolvedValue(0);
         documentPageCreateManyMock.mockReset();
         documentPageFindManyMock.mockReset();
         usageEventsAggregateMock.mockReset();
@@ -373,6 +382,99 @@ describe("Rocket.Chat Integration Router", () => {
                     }),
                 }),
             );
+        });
+    });
+
+    describe("DELETE /sources/:id", () => {
+        const validSourceId = "a0000000-0000-4000-8000-000000000001";
+
+        it("returns 400 when workspaceId or roomId is missing in room mode", async () => {
+            const app = buildTestApp();
+            const res = await request(app)
+                .delete(`/api/v1/integrations/rocketchat/sources/${validSourceId}`)
+                .set("Authorization", "Bearer test-secret-token");
+
+            expect(res.status).toBe(400);
+        });
+
+        it("returns 404 if source is not found", async () => {
+            chatSourceFindUniqueMock.mockResolvedValue(null);
+
+            const app = buildTestApp();
+            const res = await request(app)
+                .delete(`/api/v1/integrations/rocketchat/sources/${validSourceId}?workspaceId=default&roomId=room-1`)
+                .set("Authorization", "Bearer test-secret-token");
+
+            expect(res.status).toBe(404);
+            expect(res.body.message).toMatch(/Source not found/i);
+        });
+
+        it("returns 403 if source does not belong to specified room", async () => {
+            chatSourceFindUniqueMock.mockResolvedValue({
+                id: validSourceId,
+                rocketchatWorkspaceId: "default",
+                rocketchatRoomId: "other-room",
+                documentationUrl: "rocketchat://default/other-room/doc.md",
+                collectionName: "rc_123",
+            });
+
+            const app = buildTestApp();
+            const res = await request(app)
+                .delete(`/api/v1/integrations/rocketchat/sources/${validSourceId}?workspaceId=default&roomId=room-1`)
+                .set("Authorization", "Bearer test-secret-token");
+
+            expect(res.status).toBe(403);
+        });
+
+        it("deletes source and cleans up Qdrant collection when no other source shares collection", async () => {
+            chatSourceFindUniqueMock.mockResolvedValue({
+                id: validSourceId,
+                rocketchatWorkspaceId: "default",
+                rocketchatRoomId: "room-1",
+                documentationUrl: "rocketchat://default/room-1/doc.md",
+                collectionName: "rc_test_collection",
+            });
+            chatSourceCountMock.mockResolvedValue(0);
+            qdrantDeleteCollectionMock.mockResolvedValue({});
+            chatSourceDeleteMock.mockResolvedValue({ id: validSourceId });
+
+            const app = buildTestApp();
+            const res = await request(app)
+                .delete(`/api/v1/integrations/rocketchat/sources/${validSourceId}?workspaceId=default&roomId=room-1`)
+                .set("Authorization", "Bearer test-secret-token");
+
+            expect(res.status).toBe(200);
+            expect(res.body.data).toEqual({
+                id: validSourceId,
+                deleted: true,
+                vectorsRemoved: true,
+                qdrant: { deleted: true },
+            });
+            expect(qdrantDeleteCollectionMock).toHaveBeenCalledWith("rc_test_collection", { timeout: 60000 });
+            expect(chatSourceDeleteMock).toHaveBeenCalledWith({ where: { id: validSourceId } });
+        });
+
+        it("does not delete Qdrant collection if another source shares it", async () => {
+            chatSourceFindUniqueMock.mockResolvedValue({
+                id: validSourceId,
+                rocketchatWorkspaceId: "default",
+                rocketchatRoomId: "room-1",
+                documentationUrl: "rocketchat://default/room-1/doc.md",
+                collectionName: "rc_shared_collection",
+            });
+            chatSourceCountMock.mockResolvedValue(1);
+            chatSourceDeleteMock.mockResolvedValue({ id: validSourceId });
+
+            const app = buildTestApp();
+            const res = await request(app)
+                .delete(`/api/v1/integrations/rocketchat/sources/${validSourceId}?workspaceId=default&roomId=room-1`)
+                .set("Authorization", "Bearer test-secret-token");
+
+            expect(res.status).toBe(200);
+            expect(res.body.data.deleted).toBe(true);
+            expect(res.body.data.vectorsRemoved).toBe(false);
+            expect(qdrantDeleteCollectionMock).not.toHaveBeenCalled();
+            expect(chatSourceDeleteMock).toHaveBeenCalledWith({ where: { id: validSourceId } });
         });
     });
 
