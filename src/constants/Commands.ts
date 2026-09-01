@@ -7,6 +7,7 @@ export const COMMANDS = {
     SUMMARIZE: 'summarize',
     EXPLAIN: 'explain',
     TRANSLATE: 'translate',
+    RAG: 'rag',
 } as const;
 
 /**

@@ -934,14 +934,14 @@ git commit -m "feat: add source and feedback backend client methods"
 - Modify: `src/constants/Commands.ts`
 - Test/build: app TypeScript build
 
-- [ ] **Step 1: Run impact analysis**
+- [x] **Step 1: Run impact analysis**
 
 ```bash
 node .gitnexus/run.cjs impact -r RAGChat RagChatApp --direction upstream --file RagChatApp.ts
 node .gitnexus/run.cjs impact -r RAGChat COMMANDS --direction upstream --file src/constants/Commands.ts
 ```
 
-- [ ] **Step 2: Implement only useful subcommands**
+- [x] **Step 2: Implement only useful subcommands**
 
 Support:
 
@@ -953,7 +953,7 @@ Defer:
 - `/rag prune`
 - `/rag settings`
 
-- [ ] **Step 3: Render as plain message first**
+- [x] **Step 3: Render as plain message first**
 
 Use text/attachment output before UIKit modal:
 
@@ -965,7 +965,7 @@ Knowledge Base
    Last indexed: 2026-09-01
 ```
 
-- [ ] **Step 4: Register command**
+- [x] **Step 4: Register command**
 
 In `RagChatApp.extendConfiguration`, add:
 
@@ -973,7 +973,7 @@ In `RagChatApp.extendConfiguration`, add:
 configuration.slashCommands.provideSlashCommand(new RagCommand())
 ```
 
-- [ ] **Step 5: Run build**
+- [x] **Step 5: Run build**
 
 ```bash
 npx tsc --noEmit -p tsconfig.json
@@ -981,7 +981,7 @@ npx tsc --noEmit -p tsconfig.json
 
 Expected: build succeeds.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add RagChatApp.ts src/constants/Commands.ts src/commands/RagCommand.ts

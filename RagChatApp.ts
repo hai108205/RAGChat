@@ -24,6 +24,7 @@ import { SearchCommand } from './src/commands/SearchCommand';
 import { SummarizeCommand } from './src/commands/SummarizeCommand';
 import { ExplainCommand } from './src/commands/ExplainCommand';
 import { TranslateCommand } from './src/commands/TranslateCommand';
+import { RagCommand } from './src/commands/RagCommand';
 import { BotMessageHandler } from './src/handlers/BotMessageHandler';
 import { MentionHandler } from './src/handlers/MentionHandler';
 import { FileUploadHandler } from './src/handlers/FileUploadHandler';
@@ -90,6 +91,7 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
             configuration.slashCommands.provideSlashCommand(new SummarizeCommand()),
             configuration.slashCommands.provideSlashCommand(new ExplainCommand()),
             configuration.slashCommands.provideSlashCommand(new TranslateCommand()),
+            configuration.slashCommands.provideSlashCommand(new RagCommand()),
         ]);
 
         // 3. Register callback endpoint for backend async job completions
