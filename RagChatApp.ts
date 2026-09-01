@@ -17,6 +17,14 @@ import { IPostMessageSentToBot } from '@rocket.chat/apps-engine/definition/messa
 import { IPostMessageSent } from '@rocket.chat/apps-engine/definition/messages/IPostMessageSent';
 import { IPreFileUpload, IFileUploadContext } from '@rocket.chat/apps-engine/definition/uploads';
 import { ApiVisibility, ApiSecurity } from '@rocket.chat/apps-engine/definition/api';
+import {
+    IUIKitInteractionHandler,
+    UIKitBlockInteractionContext,
+    UIKitViewSubmitInteractionContext,
+    UIKitViewCloseInteractionContext,
+    UIKitActionButtonInteractionContext,
+    IUIKitResponse,
+} from '@rocket.chat/apps-engine/definition/uikit';
 
 import { registerSettings } from './src/settings/Settings';
 import { AskCommand } from './src/commands/AskCommand';
@@ -28,6 +36,8 @@ import { RagCommand } from './src/commands/RagCommand';
 import { BotMessageHandler } from './src/handlers/BotMessageHandler';
 import { MentionHandler } from './src/handlers/MentionHandler';
 import { FileUploadHandler } from './src/handlers/FileUploadHandler';
+import { BlockActionHandler } from './src/handlers/BlockActionHandler';
+import { ViewSubmitHandler } from './src/handlers/ViewSubmitHandler';
 import { CallbackEndpoint } from './src/api/CallbackEndpoint';
 
 /**
@@ -35,18 +45,21 @@ import { CallbackEndpoint } from './src/api/CallbackEndpoint';
  *
  * Implements core App-Engine lifecycle hooks and registers:
  * - App Settings (backend URL, API key, LLM parameters)
- * - Slash Commands (/ask, /search, /summarize, /explain, /translate)
+ * - Slash Commands (/ask, /search, /summarize, /explain, /translate, /rag)
  * - REST API Endpoints (Webhook callback for asynchronous AI worker notifications)
  * - Event Handlers:
  *   - IPostMessageSentToBot: handles 1-on-1 direct messages to the bot
  *   - IPostMessageSent: handles @mentions in public and private channels
  *   - IPreFileUpload: intercepts document uploads to index them into vector DB
+ *   - IUIKitInteractionHandler: handles interactive buttons and modal submits
  */
-export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessageSent, IPreFileUpload {
+export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessageSent, IPreFileUpload, IUIKitInteractionHandler {
     // Lazy-instantiated handlers to optimize memory and lifecycle initialization
     private botHandler: BotMessageHandler | null = null;
     private mentionHandler: MentionHandler | null = null;
     private uploadHandler: FileUploadHandler | null = null;
+    private blockActionHandler: BlockActionHandler | null = null;
+    private viewSubmitHandler: ViewSubmitHandler | null = null;
 
     private getBotHandler(): BotMessageHandler {
         if (!this.botHandler) {
@@ -67,6 +80,20 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
             this.uploadHandler = new FileUploadHandler();
         }
         return this.uploadHandler;
+    }
+
+    private getBlockActionHandler(): BlockActionHandler {
+        if (!this.blockActionHandler) {
+            this.blockActionHandler = new BlockActionHandler();
+        }
+        return this.blockActionHandler;
+    }
+
+    private getViewSubmitHandler(): ViewSubmitHandler {
+        if (!this.viewSubmitHandler) {
+            this.viewSubmitHandler = new ViewSubmitHandler();
+        }
+        return this.viewSubmitHandler;
     }
 
     constructor(info: IAppInfo, logger: ILogger, accessors: IAppAccessors) {
@@ -189,4 +216,47 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
     ): Promise<void> {
         await this.getUploadHandler().executePreFileUpload(context, read, http, persis, modify);
     }
+
+    // --- IUIKitInteractionHandler: Interactive UI components and actions ---
+
+    public async executeBlockActionHandler(
+        context: UIKitBlockInteractionContext,
+        read: IRead,
+        http: IHttp,
+        persistence: IPersistence,
+        modify: IModify,
+    ): Promise<IUIKitResponse> {
+        return this.getBlockActionHandler().handleBlockAction(context, read, http, persistence, modify);
+    }
+
+    public async executeViewSubmitHandler(
+        context: UIKitViewSubmitInteractionContext,
+        read: IRead,
+        http: IHttp,
+        persistence: IPersistence,
+        modify: IModify,
+    ): Promise<IUIKitResponse> {
+        return this.getViewSubmitHandler().handleViewSubmit(context, read, http, persistence, modify);
+    }
+
+    public async executeViewClosedHandler(
+        context: UIKitViewCloseInteractionContext,
+        _read: IRead,
+        _http: IHttp,
+        _persistence: IPersistence,
+        _modify: IModify,
+    ): Promise<IUIKitResponse> {
+        return context.getInteractionResponder().successResponse();
+    }
+
+    public async executeActionButtonHandler(
+        context: UIKitActionButtonInteractionContext,
+        _read: IRead,
+        _http: IHttp,
+        _persistence: IPersistence,
+        _modify: IModify,
+    ): Promise<IUIKitResponse> {
+        return context.getInteractionResponder().successResponse();
+    }
 }
+

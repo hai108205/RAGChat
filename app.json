@@ -15,7 +15,8 @@
     "implements": [
         "IPostMessageSentToBot",
         "IPostMessageSent",
-        "IPreFileUpload"
+        "IPreFileUpload",
+        "IUIKitInteractionHandler"
     ],
     "permissions": [
         {
@@ -47,6 +48,9 @@
         },
         {
             "name": "api"
+        },
+        {
+            "name": "ui.interact"
         }
     ]
 }

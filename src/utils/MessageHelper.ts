@@ -126,5 +126,31 @@ export async function updateMessage(
     await modify.getUpdater().finish(builder);
 }
 
+/**
+ * Sends a private notification to a specific user in a room.
+ */
+export async function sendNotification(
+    read: IRead,
+    modify: IModify,
+    user: any,
+    room: IRoom | unknown,
+    text: string,
+): Promise<void> {
+    const appUser = await read.getUserReader().getAppUser();
+    if (!appUser || !user) {
+        return;
+    }
+
+    const safeText = asNonEmptyString(text, '...');
+    const builder = modify.getCreator().startMessage()
+        .setRoom(room as IRoom)
+        .setSender(appUser)
+        .setText(safeText)
+        .setGroupable(false);
+
+    await modify.getNotifier().notifyUser(user, builder.getMessage());
+}
+
+
 
 

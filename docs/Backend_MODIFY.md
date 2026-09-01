@@ -1000,13 +1000,13 @@ git commit -m "feat: add rag docs command"
 - Optional Create: `src/uikit/blocks/DocumentListBlock.ts`
 - Optional Create: `src/uikit/modals/ConfirmDeleteModal.ts`
 
-- [ ] **Step 1: Run impact analysis**
+- [x] **Step 1: Run impact analysis**
 
 ```bash
 node .gitnexus/run.cjs impact -r RAGChat RagChatApp --direction upstream --file RagChatApp.ts
 ```
 
-- [ ] **Step 2: Add permissions**
+- [x] **Step 2: Add permissions**
 
 Add only if required by Apps-Engine version:
 
@@ -1015,7 +1015,7 @@ Add only if required by Apps-Engine version:
 { "name": "ui.registerButtons" }
 ```
 
-- [ ] **Step 3: Implement `IUIKitInteractionHandler`**
+- [x] **Step 3: Implement `IUIKitInteractionHandler`**
 
 Add handler methods:
 
@@ -1026,7 +1026,7 @@ Add handler methods:
 
 Unused handlers should return success response.
 
-- [ ] **Step 4: Add feedback buttons first**
+- [x] **Step 4: Add feedback buttons first**
 
 Actions:
 
@@ -1040,7 +1040,7 @@ Payload should include:
 - room id
 - user id
 
-- [ ] **Step 5: Add delete confirmation only after source delete API passes**
+- [x] **Step 5: Add delete confirmation only after source delete API passes**
 
 Deletion flow:
 
@@ -1050,7 +1050,7 @@ Deletion flow:
 - Submit calls `DELETE /sources/:sourceId`.
 - App sends private/user notification on success/failure.
 
-- [ ] **Step 6: Run build**
+- [x] **Step 6: Run build**
 
 ```bash
 npx tsc --noEmit -p tsconfig.json
@@ -1058,7 +1058,7 @@ npx tsc --noEmit -p tsconfig.json
 
 Expected: build succeeds.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add app.json RagChatApp.ts src/handlers/BlockActionHandler.ts src/handlers/ViewSubmitHandler.ts
