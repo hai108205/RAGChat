@@ -4,6 +4,8 @@ const userFindFirstMock = vi.fn();
 const userCreateMock = vi.fn();
 const chatFindFirstMock = vi.fn();
 const chatCreateMock = vi.fn();
+const chatUpdateMock = vi.fn();
+const chatSourceFindManyMock = vi.fn();
 
 vi.mock("../utils/prismaClient.js", () => ({
     default: {
@@ -14,6 +16,10 @@ vi.mock("../utils/prismaClient.js", () => ({
         chat: {
             findFirst: (...args: any[]) => chatFindFirstMock(...args),
             create: (...args: any[]) => chatCreateMock(...args),
+            update: (...args: any[]) => chatUpdateMock(...args),
+        },
+        chatSource: {
+            findMany: (...args: any[]) => chatSourceFindManyMock(...args),
         },
     },
 }));
@@ -23,6 +29,7 @@ const {
     getOrCreateRocketChatUser,
     getOrCreateRocketChatChat,
     formatRocketChatCitations,
+    parseRocketChatDocumentationUrl,
 } = await import("../utils/rocketchatIdentity.js");
 
 describe("rocketchatIdentity", () => {
@@ -31,6 +38,9 @@ describe("rocketchatIdentity", () => {
         userCreateMock.mockReset();
         chatFindFirstMock.mockReset();
         chatCreateMock.mockReset();
+        chatUpdateMock.mockReset();
+        chatSourceFindManyMock.mockReset();
+        chatSourceFindManyMock.mockResolvedValue([]);
     });
 
     describe("normalizeRocketChatUsername", () => {
@@ -95,6 +105,7 @@ describe("rocketchatIdentity", () => {
                 id: "chat-new",
                 name: "RC_default_Room_GENERAL_Thread_t1",
             });
+            chatSourceFindManyMock.mockResolvedValue([]);
 
             const chat = await getOrCreateRocketChatChat({
                 userId: "user-1",
@@ -104,6 +115,58 @@ describe("rocketchatIdentity", () => {
 
             expect(chat.id).toBe("chat-new");
             expect(chatCreateMock).toHaveBeenCalledTimes(1);
+        });
+
+        it("connects room-scoped sources to user chat if not already linked", async () => {
+            chatFindFirstMock.mockResolvedValue({
+                id: "chat-1",
+                name: "RC_default_Room_GENERAL",
+                chatSources: [{ id: "source-1" }],
+            });
+            chatSourceFindManyMock.mockResolvedValue([
+                { id: "source-1" },
+                { id: "source-2" },
+            ]);
+            chatUpdateMock.mockResolvedValue({
+                id: "chat-1",
+                chatSources: [{ id: "source-1" }, { id: "source-2" }],
+            });
+
+            const chat = await getOrCreateRocketChatChat({
+                userId: "user-1",
+                roomId: "GENERAL",
+            });
+
+            expect(chatUpdateMock).toHaveBeenCalledWith({
+                where: { id: "chat-1" },
+                data: {
+                    chatSources: {
+                        connect: [{ id: "source-2" }],
+                    },
+                },
+                include: {
+                    chatSources: {
+                        orderBy: { createdAt: "asc" },
+                    },
+                },
+            });
+        });
+    });
+
+    describe("parseRocketChatDocumentationUrl", () => {
+        it("parses valid rocketchat URL into workspace, room, and filename", () => {
+            const parsed = parseRocketChatDocumentationUrl("rocketchat://ws-prod/room-123/guide.pdf");
+            expect(parsed).toEqual({
+                workspaceId: "ws-prod",
+                roomId: "room-123",
+                filename: "guide.pdf",
+            });
+        });
+
+        it("returns null for non-rocketchat or invalid URLs", () => {
+            expect(parseRocketChatDocumentationUrl("https://example.com/doc.md")).toBeNull();
+            expect(parseRocketChatDocumentationUrl(null)).toBeNull();
+            expect(parseRocketChatDocumentationUrl("rocketchat://incomplete")).toBeNull();
         });
     });
 

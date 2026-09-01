@@ -87,7 +87,71 @@ export async function getOrCreateRocketChatChat({
         });
     }
 
+    const roomSources = (await prisma.chatSource.findMany({
+        where: {
+            OR: [
+                {
+                    rocketchatWorkspaceId: workspaceId || "default",
+                    rocketchatRoomId: roomId,
+                    OR: [
+                        { rocketchatThreadId: threadId || null },
+                        { rocketchatThreadId: null },
+                    ],
+                },
+                {
+                    rocketchatRoomId: null,
+                    documentationUrl: {
+                        startsWith: `rocketchat://${workspaceId || "default"}/${roomId}/`,
+                    },
+                },
+            ],
+        },
+        select: { id: true },
+    })) || [];
+
+    if (roomSources && roomSources.length) {
+        const existingSourceIds = new Set((chat.chatSources || []).map((s: any) => s.id));
+        const toConnect = roomSources.filter((s) => !existingSourceIds.has(s.id));
+
+        if (toConnect.length > 0) {
+            chat = await prisma.chat.update({
+                where: { id: chat.id },
+                data: {
+                    chatSources: {
+                        connect: toConnect.map((source) => ({ id: source.id })),
+                    },
+                },
+                include: {
+                    chatSources: {
+                        orderBy: { createdAt: "asc" },
+                    },
+                },
+            });
+        }
+    }
+
     return chat;
+}
+
+/**
+ * Parses a rocketchat:// URI into its constituent parts.
+ */
+export function parseRocketChatDocumentationUrl(url?: string | null): {
+    workspaceId: string;
+    roomId: string;
+    filename: string;
+} | null {
+    if (!url || !url.startsWith("rocketchat://")) return null;
+    const parts = url.replace(/^rocketchat:\/\//, "").split("/");
+    if (parts.length >= 3) {
+        const [ws, room, ...rest] = parts;
+        return {
+            workspaceId: ws,
+            roomId: room,
+            filename: rest.join("/"),
+        };
+    }
+    return null;
 }
 
 export interface CitationSource {

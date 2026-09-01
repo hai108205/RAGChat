@@ -502,6 +502,10 @@ export const handleBase64Source = asyncHandler(async (req: Request, res: Respons
                     collectionName,
                     totalPages: chunks.length,
                     lastIndexedAt: new Date(),
+                    rocketchatWorkspaceId: workspaceId || "default",
+                    rocketchatRoomId: roomId,
+                    rocketchatThreadId: threadId || null,
+                    uploadedByRocketUserId: rocketUserId,
                     chats: {
                         connect: { id: chat.id },
                     },

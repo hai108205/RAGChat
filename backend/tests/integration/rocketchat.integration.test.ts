@@ -6,6 +6,7 @@ const userFindFirstMock = vi.fn();
 const userCreateMock = vi.fn();
 const chatFindFirstMock = vi.fn();
 const chatCreateMock = vi.fn();
+const chatUpdateMock = vi.fn();
 const chatSourceFindManyMock = vi.fn();
 const chatSourceCreateMock = vi.fn();
 const documentPageCreateManyMock = vi.fn();
@@ -59,6 +60,7 @@ vi.mock("../../utils/prismaClient.js", () => ({
         chat: {
             findFirst: (...args: any[]) => chatFindFirstMock(...args),
             create: (...args: any[]) => chatCreateMock(...args),
+            update: (...args: any[]) => chatUpdateMock(...args),
         },
         chatSource: {
             findMany: (...args: any[]) => chatSourceFindManyMock(...args),
@@ -143,7 +145,9 @@ describe("Rocket.Chat Integration Router", () => {
         userCreateMock.mockReset();
         chatFindFirstMock.mockReset();
         chatCreateMock.mockReset();
+        chatUpdateMock.mockReset();
         chatSourceFindManyMock.mockReset();
+        chatSourceFindManyMock.mockResolvedValue([]);
         chatSourceCreateMock.mockReset();
         documentPageCreateManyMock.mockReset();
         documentPageFindManyMock.mockReset();
@@ -314,6 +318,44 @@ describe("Rocket.Chat Integration Router", () => {
             expect(res.status).toBe(202);
             expect(res.body.data.status).toBe("accepted");
             expect(res.body.data.requestId).toBe("upload-req-1");
+        });
+
+        it("stores workspaceId, roomId, and uploader user id on source creation", async () => {
+            userFindFirstMock.mockResolvedValue({ id: "user-1" });
+            chatFindFirstMock.mockResolvedValue({ id: "chat-1" });
+            chatSourceCreateMock.mockResolvedValue({ id: "source-scoped" });
+            documentPageCreateManyMock.mockResolvedValue({ count: 1 });
+
+            const app = buildTestApp();
+            const res = await request(app)
+                .post("/api/v1/integrations/rocketchat/sources/base64")
+                .set("Authorization", "Bearer test-secret-token")
+                .send({
+                    workspaceId: "team-ws",
+                    rocketUserId: "u999",
+                    roomId: "ROOM_TECH",
+                    threadId: "t_456",
+                    filename: "architecture.md",
+                    contentBase64: Buffer.from("# Architecture").toString("base64"),
+                    requestId: "upload-req-scoped",
+                });
+
+            expect(res.status).toBe(202);
+
+            // Wait for setImmediate to execute
+            await new Promise((resolve) => setTimeout(resolve, 50));
+
+            expect(chatSourceCreateMock).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    data: expect.objectContaining({
+                        heading: "architecture.md",
+                        rocketchatWorkspaceId: "team-ws",
+                        rocketchatRoomId: "ROOM_TECH",
+                        rocketchatThreadId: "t_456",
+                        uploadedByRocketUserId: "u999",
+                    }),
+                }),
+            );
         });
     });
 
