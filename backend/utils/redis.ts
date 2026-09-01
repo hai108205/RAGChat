@@ -1,8 +1,15 @@
-import { Redis } from "ioredis";
+import { Redis, type RedisOptions } from "ioredis";
 import { EventEmitter } from "events";
 
-const redis = new Redis({ maxRetriesPerRequest: null });
-const redisSubscriber = new Redis({ maxRetriesPerRequest: null });
+const redisPort = Number.parseInt(process.env.REDIS_PORT || "6379", 10);
+const redisOptions: RedisOptions = {
+    host: process.env.REDIS_HOST || "localhost",
+    port: Number.isNaN(redisPort) ? 6379 : redisPort,
+    maxRetriesPerRequest: null,
+};
+
+const redis = new Redis(redisOptions);
+const redisSubscriber = new Redis(redisOptions);
 
 export const progressEmitter = new EventEmitter();
 
