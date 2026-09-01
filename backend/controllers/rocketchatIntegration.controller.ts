@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import crypto from "crypto";
 import OpenAI from "openai";
 import prisma from "../utils/prismaClient.js";
 import asyncHandler from "../utils/asyncHandler.js";
@@ -488,17 +489,23 @@ export const handleBase64Source = asyncHandler(async (req: Request, res: Respons
             const textContent = buffer.toString("utf8");
 
             const chunks = splitDocumentationContent(textContent, {
-                chunkSize: 500,
-                chunkOverlap: 50,
+                chunkSize: 1000,
+                chunkOverlap: 150,
             });
 
             const collectionName = `rc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+            const sourceUrl = `rocketchat://${workspaceId}/${roomId}/${filename}`;
+
+            // Create Qdrant collection for vector search
+            await qdrant.createCollection(collectionName, {
+                vectors: { size: 1536, distance: "Cosine" },
+            });
 
             // Create or update ChatSource
             const source = await prisma.chatSource.create({
                 data: {
                     heading: filename,
-                    documentationUrl: `rocketchat://${workspaceId}/${roomId}/${filename}`,
+                    documentationUrl: sourceUrl,
                     collectionName,
                     totalPages: chunks.length,
                     lastIndexedAt: new Date(),
@@ -513,10 +520,31 @@ export const handleBase64Source = asyncHandler(async (req: Request, res: Respons
             });
 
             if (chunks.length > 0) {
+                const embeddings = (await generateVectorEmbeddings(
+                    chunks.map((c) => c.content),
+                )) as number[][];
+
+                await qdrant.upsert(collectionName, {
+                    wait: true,
+                    points: chunks.map((chunk, index) => ({
+                        id: crypto.randomUUID(),
+                        vector: embeddings[index],
+                        payload: {
+                            url: sourceUrl,
+                            title: filename,
+                            heading: chunk.heading || filename,
+                            body: chunk.content,
+                            chatSourceId: source.id,
+                            chunkType: chunk.chunkType,
+                            hasCodeBlock: chunk.hasCodeBlock,
+                        },
+                    })),
+                });
+
                 await prisma.documentPage.createMany({
                     data: chunks.map((c) => ({
                         heading: c.heading || filename,
-                        pageUrl: `rocketchat://${workspaceId}/${roomId}/${filename}`,
+                        pageUrl: sourceUrl,
                         chatSourceId: source.id,
                     })),
                 });

@@ -17,6 +17,30 @@ const auditEventCreateMock = vi.fn();
 const chatMessageCreateMock = vi.fn();
 const chatMessageSourceCreateManyMock = vi.fn();
 
+const qdrantCreateCollectionMock = vi.fn().mockResolvedValue({});
+const qdrantUpsertMock = vi.fn().mockResolvedValue({});
+const qdrantQueryMock = vi.fn().mockResolvedValue({ points: [] });
+const qdrantDeleteCollectionMock = vi.fn().mockResolvedValue({});
+
+vi.mock("../../utils/ragClients.js", () => ({
+    qdrant: {
+        createCollection: (...args: any[]) => qdrantCreateCollectionMock(...args),
+        upsert: (...args: any[]) => qdrantUpsertMock(...args),
+        query: (...args: any[]) => qdrantQueryMock(...args),
+        deleteCollection: (...args: any[]) => qdrantDeleteCollectionMock(...args),
+    },
+    treeindex: {},
+}));
+
+const generateVectorEmbeddingsMock = vi.fn();
+vi.mock("../../utils/ragUtilities.js", async (importOriginal) => {
+    const actual = (await importOriginal()) as any;
+    return {
+        ...actual,
+        generateVectorEmbeddings: (...args: any[]) => generateVectorEmbeddingsMock(...args),
+    };
+});
+
 vi.mock("ioredis", () => {
     class MockRedis {
         constructor() {}
@@ -156,6 +180,16 @@ describe("Rocket.Chat Integration Router", () => {
         auditEventCreateMock.mockReset();
         chatMessageCreateMock.mockReset();
         chatMessageSourceCreateManyMock.mockReset();
+        qdrantCreateCollectionMock.mockReset().mockResolvedValue({});
+        qdrantUpsertMock.mockReset().mockResolvedValue({});
+        qdrantQueryMock.mockReset().mockResolvedValue({ points: [] });
+        qdrantDeleteCollectionMock.mockReset().mockResolvedValue({});
+        generateVectorEmbeddingsMock.mockReset().mockImplementation(async (texts: string | string[]) => {
+            if (Array.isArray(texts)) {
+                return texts.map(() => new Array(1536).fill(0.1));
+            }
+            return new Array(1536).fill(0.1);
+        });
     });
 
     describe("Authentication", () => {
@@ -356,6 +390,33 @@ describe("Rocket.Chat Integration Router", () => {
                     }),
                 }),
             );
+
+            expect(qdrantCreateCollectionMock).toHaveBeenCalledWith(
+                expect.any(String),
+                expect.objectContaining({
+                    vectors: { size: 1536, distance: "Cosine" },
+                }),
+            );
+
+            expect(generateVectorEmbeddingsMock).toHaveBeenCalled();
+            expect(qdrantUpsertMock).toHaveBeenCalledWith(
+                expect.any(String),
+                expect.objectContaining({
+                    wait: true,
+                    points: expect.arrayContaining([
+                        expect.objectContaining({
+                            id: expect.any(String),
+                            vector: expect.any(Array),
+                            payload: expect.objectContaining({
+                                url: "rocketchat://team-ws/ROOM_TECH/architecture.md",
+                                title: "architecture.md",
+                                chatSourceId: "source-scoped",
+                            }),
+                        }),
+                    ]),
+                }),
+            );
+            expect(documentPageCreateManyMock).toHaveBeenCalled();
         });
     });
 
