@@ -96,3 +96,29 @@ export interface UtilityCompletionData {
     translation?: string;
     results?: SearchResult[];
 }
+
+export interface SourceDocument {
+    id: string;
+    filename: string;
+    documentationUrl?: string;
+    chunksCount: number;
+    totalPages?: number;
+    createdAt?: string;
+    lastIndexedAt?: string;
+    status: 'ACTIVE' | 'EMPTY' | 'FAILED';
+}
+
+export interface SourcesListData {
+    sources: SourceDocument[];
+}
+
+export interface FeedbackPayload {
+    messageId?: string;
+    chatMessageId?: string;
+    rating: 'positive' | 'negative';
+    feedbackText?: string;
+    rocketUserId: string;
+    workspaceId?: string;
+    roomId?: string;
+}
+

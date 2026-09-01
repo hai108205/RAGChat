@@ -13,8 +13,11 @@ import {
     BackendResponseEnvelope,
     Base64UploadPayload,
     Base64UploadResponseData,
+    FeedbackPayload,
     IntegrationStatsData,
     SearchResult,
+    SourceDocument,
+    SourcesListData,
     StatsDocument,
     UtilityCompletionData,
 } from './BackendTypes';
@@ -25,7 +28,7 @@ export interface BackendAskResponse {
     model: string;
 }
 
-export { SearchResult } from './BackendTypes';
+export { SearchResult, SourceDocument, SourcesListData, FeedbackPayload } from './BackendTypes';
 
 /**
  * HTTP Client wrapper for communicating with the Node.js/Express RAG backend.
@@ -111,6 +114,71 @@ export class BackendClient {
             const data = this.extractData<IntegrationStatsData>(response);
 
             return data?.documents || [];
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+            throw new Error(message);
+        }
+    }
+
+    /**
+     * Retrieves scoped knowledge base sources via `/api/v1/integrations/rocketchat/sources`.
+     */
+    public async listSources(
+        workspaceId?: string,
+        roomId?: string,
+        threadId?: string,
+    ): Promise<SourceDocument[]> {
+        try {
+            const queryParams: string[] = [];
+            if (workspaceId) queryParams.push(`workspaceId=${encodeURIComponent(workspaceId)}`);
+            if (roomId) queryParams.push(`roomId=${encodeURIComponent(roomId)}`);
+            if (threadId) queryParams.push(`threadId=${encodeURIComponent(threadId)}`);
+
+            const queryString = queryParams.length ? `?${queryParams.join('&')}` : '';
+            const response = await this.get(`/api/v1/integrations/rocketchat/sources${queryString}`);
+            const data = this.extractData<SourcesListData>(response);
+
+            return data?.sources || [];
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+            throw new Error(message);
+        }
+    }
+
+    /**
+     * Deletes a knowledge base source via `DELETE /api/v1/integrations/rocketchat/sources/:id`.
+     */
+    public async deleteSource(
+        sourceId: string,
+        workspaceId?: string,
+        roomId?: string,
+        mode: 'room' | 'global' = 'room',
+    ): Promise<boolean> {
+        try {
+            const queryParams: string[] = [];
+            if (workspaceId) queryParams.push(`workspaceId=${encodeURIComponent(workspaceId)}`);
+            if (roomId) queryParams.push(`roomId=${encodeURIComponent(roomId)}`);
+            if (mode) queryParams.push(`mode=${encodeURIComponent(mode)}`);
+
+            const queryString = queryParams.length ? `?${queryParams.join('&')}` : '';
+            await this.delete(`/api/v1/integrations/rocketchat/sources/${encodeURIComponent(sourceId)}${queryString}`);
+            return true;
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+            throw new Error(message);
+        }
+    }
+
+    /**
+     * Submits answer feedback via `POST /api/v1/integrations/rocketchat/feedback`.
+     */
+    public async submitFeedback(
+        payload: FeedbackPayload,
+    ): Promise<boolean> {
+        try {
+            const response = await this.post('/api/v1/integrations/rocketchat/feedback', payload);
+            this.assertSuccess(response);
+            return true;
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             throw new Error(message);
@@ -336,6 +404,22 @@ export class BackendClient {
         const headers = await this.buildHeaders();
 
         const response = await this.http.get(url, {
+            headers,
+            timeout: 60000,
+        });
+
+        this.assertSuccess(response);
+        return response;
+    }
+
+    /**
+     * Executes HTTP DELETE request to backend with headers and timeout.
+     */
+    public async delete(path: string): Promise<IHttpResponse> {
+        const url = `${await this.getBackendUrl()}${path}`;
+        const headers = await this.buildHeaders();
+
+        const response = await this.http.del(url, {
             headers,
             timeout: 60000,
         });

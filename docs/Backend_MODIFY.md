@@ -860,13 +860,13 @@ git commit -m "feat: include chat message id in rocketchat callbacks"
 - Modify: `src/lib/BackendTypes.ts`
 - Test: existing app build/test command from `package.json`
 
-- [ ] **Step 1: Run impact analysis**
+- [x] **Step 1: Run impact analysis**
 
 ```bash
 node .gitnexus/run.cjs impact -r RAGChat BackendClient --direction upstream --file src/lib/BackendClient.ts
 ```
 
-- [ ] **Step 2: Add DTOs**
+- [x] **Step 2: Add DTOs**
 
 Add:
 
@@ -897,7 +897,7 @@ export interface FeedbackPayload {
 }
 ```
 
-- [ ] **Step 3: Add client methods**
+- [x] **Step 3: Add client methods**
 
 ```ts
 public async listSources(workspaceId?: string, roomId?: string, threadId?: string): Promise<SourceDocument[]>
@@ -905,11 +905,11 @@ public async deleteSource(sourceId: string, workspaceId: string, roomId: string,
 public async submitFeedback(payload: FeedbackPayload): Promise<boolean>
 ```
 
-- [ ] **Step 4: Keep old `listDocuments` compatibility**
+- [x] **Step 4: Keep old `listDocuments` compatibility**
 
 `listDocuments` can call `/stats` until `/rag docs` is migrated.
 
-- [ ] **Step 5: Run build**
+- [x] **Step 5: Run build**
 
 ```bash
 npx tsc --noEmit -p tsconfig.json
@@ -917,7 +917,7 @@ npx tsc --noEmit -p tsconfig.json
 
 Expected: TypeScript build succeeds.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/lib/BackendClient.ts src/lib/BackendTypes.ts
