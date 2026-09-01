@@ -28,6 +28,10 @@ backend/node_modules/
 
 # JetBrains IDEs
 out/
+
+# Compiled artifacts inside SDK source (TS is the source of truth)
+RagChatApp.js
+src/**/*.js
 .idea/
 .idea_modules/
 
