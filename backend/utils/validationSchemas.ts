@@ -411,4 +411,17 @@ export const rocketchatDeleteSourceSchema = {
     }),
 };
 
+export const rocketchatFeedbackSchema = {
+    body: z.object({
+        messageId: z.string().optional(),
+        chatMessageId: z.string().uuid("Invalid chatMessageId").optional(),
+        rating: z.enum(["positive", "negative"]),
+        feedbackText: z.string().max(2000).optional(),
+        rocketUserId: z.string().min(1, "rocketUserId is required"),
+        workspaceId: z.string().optional(),
+        roomId: z.string().optional(),
+    }),
+};
+
+
 

@@ -8,6 +8,7 @@ import {
     rocketchatDeleteSourceSchema,
     rocketchatBase64SourceSchema,
     rocketchatUtilityCompletionSchema,
+    rocketchatFeedbackSchema,
 } from "../utils/validationSchemas.js";
 import {
     handleAsyncMessage,
@@ -16,6 +17,7 @@ import {
     deleteSource,
     handleBase64Source,
     handleUtilityCompletion,
+    submitFeedback,
 } from "../controllers/rocketchatIntegration.controller.js";
 
 const rocketchatRouter = Router();
@@ -36,6 +38,10 @@ rocketchatRouter
 rocketchatRouter
     .route("/sources/:id")
     .delete(validate(rocketchatDeleteSourceSchema), deleteSource);
+
+rocketchatRouter
+    .route("/feedback")
+    .post(validate(rocketchatFeedbackSchema), submitFeedback);
 
 rocketchatRouter
     .route("/sources/base64")

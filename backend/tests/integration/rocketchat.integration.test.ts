@@ -18,6 +18,7 @@ const usageEventsAggregateMock = vi.fn();
 const usageEventsCreateMock = vi.fn();
 const auditEventCreateMock = vi.fn();
 const chatMessageCreateMock = vi.fn();
+const chatMessageFindUniqueMock = vi.fn();
 const chatMessageSourceCreateManyMock = vi.fn();
 
 const qdrantCreateCollectionMock = vi.fn().mockResolvedValue({});
@@ -108,6 +109,7 @@ vi.mock("../../utils/prismaClient.js", () => ({
             create: (...args: any[]) => auditEventCreateMock(...args),
         },
         chatMessage: {
+            findUnique: (...args: any[]) => chatMessageFindUniqueMock(...args),
             create: (...args: any[]) => chatMessageCreateMock(...args),
         },
         chatMessageSource: {
@@ -188,6 +190,7 @@ describe("Rocket.Chat Integration Router", () => {
         usageEventsCreateMock.mockReset();
         auditEventCreateMock.mockReset();
         chatMessageCreateMock.mockReset();
+        chatMessageFindUniqueMock.mockReset();
         chatMessageSourceCreateManyMock.mockReset();
         qdrantCreateCollectionMock.mockReset().mockResolvedValue({});
         qdrantUpsertMock.mockReset().mockResolvedValue({});
@@ -475,6 +478,62 @@ describe("Rocket.Chat Integration Router", () => {
             expect(res.body.data.vectorsRemoved).toBe(false);
             expect(qdrantDeleteCollectionMock).not.toHaveBeenCalled();
             expect(chatSourceDeleteMock).toHaveBeenCalledWith({ where: { id: validSourceId } });
+        });
+    });
+
+    describe("POST /feedback", () => {
+        const validMsgId = "a0000000-0000-4000-8000-000000000002";
+
+        it("validates required fields", async () => {
+            const app = buildTestApp();
+            const res = await request(app)
+                .post("/api/v1/integrations/rocketchat/feedback")
+                .set("Authorization", "Bearer test-secret-token")
+                .send({
+                    rating: "positive",
+                    // missing rocketUserId
+                });
+
+            expect(res.status).toBe(400);
+        });
+
+        it("successfully records feedback and writes audit log", async () => {
+            userFindFirstMock.mockResolvedValue({ id: "user-feedback-1" });
+            chatMessageFindUniqueMock.mockResolvedValue({ id: validMsgId, chatId: "chat-feedback-1" });
+            auditEventCreateMock.mockResolvedValue({ id: "audit-1" });
+
+            const app = buildTestApp();
+            const res = await request(app)
+                .post("/api/v1/integrations/rocketchat/feedback")
+                .set("Authorization", "Bearer test-secret-token")
+                .send({
+                    workspaceId: "team-ws",
+                    rocketUserId: "u777",
+                    roomId: "GENERAL",
+                    chatMessageId: validMsgId,
+                    rating: "positive",
+                    feedbackText: "Great and accurate answer!",
+                });
+
+            expect(res.status).toBe(200);
+            expect(res.body.data).toEqual({
+                recorded: true,
+                rating: "positive",
+                chatMessageId: validMsgId,
+            });
+
+            expect(auditEventCreateMock).toHaveBeenCalledWith({
+                data: expect.objectContaining({
+                    type: "rocketchat.feedback",
+                    userId: "user-feedback-1",
+                    chatId: "chat-feedback-1",
+                    metadata: expect.objectContaining({
+                        rocketUserId: "u777",
+                        rating: "positive",
+                        feedbackText: "Great and accurate answer!",
+                    }),
+                }),
+            });
         });
     });
 

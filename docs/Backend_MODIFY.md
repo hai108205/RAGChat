@@ -733,14 +733,14 @@ git commit -m "feat: add safe rocketchat source deletion"
 - Modify: `backend/utils/validationSchemas.ts`
 - Test: `backend/tests/integration/rocketchat.integration.test.ts`
 
-- [ ] **Step 1: Run impact analysis**
+- [x] **Step 1: Run impact analysis**
 
 ```bash
 node .gitnexus/run.cjs impact -r RAGChat createAuditEvent --direction upstream
 node .gitnexus/run.cjs impact -r RAGChat handleAsyncMessage --direction upstream --file backend/controllers/rocketchatIntegration.controller.ts
 ```
 
-- [ ] **Step 2: Add feedback schema**
+- [x] **Step 2: Add feedback schema**
 
 ```ts
 export const rocketchatFeedbackSchema = {
@@ -756,7 +756,7 @@ export const rocketchatFeedbackSchema = {
 };
 ```
 
-- [ ] **Step 3: Implement controller**
+- [x] **Step 3: Implement controller**
 
 Store as `AuditEvent` first:
 
@@ -774,7 +774,7 @@ await createAuditEvent("rocketchat.feedback", user.id, chatIdOrNull, {
 
 Do not create a new `Feedback` table until reporting requirements are clear.
 
-- [ ] **Step 4: Add route**
+- [x] **Step 4: Add route**
 
 ```ts
 rocketchatRouter
@@ -782,7 +782,7 @@ rocketchatRouter
     .post(validate(rocketchatFeedbackSchema), submitFeedback);
 ```
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 ```bash
 cd backend
@@ -791,7 +791,7 @@ pnpm vitest run tests/integration/rocketchat.integration.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/routers/rocketchatIntegration.route.ts backend/controllers/rocketchatIntegration.controller.ts backend/utils/validationSchemas.ts backend/tests/integration/rocketchat.integration.test.ts

@@ -613,6 +613,59 @@ export const deleteSource = asyncHandler(async (req: Request, res: Response) => 
 });
 
 /**
+ * POST /api/v1/integrations/rocketchat/feedback
+ */
+export const submitFeedback = asyncHandler(async (req: Request, res: Response) => {
+    const {
+        messageId,
+        chatMessageId,
+        rating,
+        feedbackText,
+        rocketUserId,
+        workspaceId = "default",
+        roomId,
+    } = req.body;
+
+    const user = await getOrCreateRocketChatUser({
+        workspaceId,
+        rocketUserId,
+    });
+
+    let chatIdOrNull: string | null = null;
+    if (chatMessageId) {
+        const msg = await prisma.chatMessage.findUnique({
+            where: { id: chatMessageId },
+            select: { chatId: true },
+        });
+        if (msg) {
+            chatIdOrNull = msg.chatId;
+        }
+    }
+
+    await createAuditEvent("rocketchat.feedback", user.id, chatIdOrNull, {
+        messageId,
+        chatMessageId,
+        rating,
+        feedbackText,
+        rocketUserId,
+        workspaceId,
+        roomId,
+    });
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                recorded: true,
+                rating,
+                chatMessageId,
+            },
+            "Feedback recorded successfully",
+        ),
+    );
+});
+
+/**
  * POST /api/v1/integrations/rocketchat/sources/base64
  */
 export const handleBase64Source = asyncHandler(async (req: Request, res: Response) => {
