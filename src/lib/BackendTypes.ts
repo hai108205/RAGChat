@@ -150,13 +150,16 @@ export interface UtilityCompletionPayload {
     topK?: number;
     workspaceId?: string;
     roomId?: string;
+    threadId?: string | null;
     model?: string;
+    embeddingModel?: string;
     temperature?: number;
 }
 
 export interface SearchResult {
     title: string;
     snippet: string;
+    pageUrl?: string;
     relevance: number;
     metadata?: Record<string, unknown>;
 }
@@ -190,7 +193,26 @@ export interface FeedbackPayload {
     rating: 'positive' | 'negative';
     feedbackText?: string;
     rocketUserId: string;
+    actorRocketUserId?: string;
     workspaceId?: string;
     roomId?: string;
 }
+
+export interface DeleteSourceOptions {
+    actorRocketUserId?: string;
+    canManageSources?: boolean;
+}
+
+export interface DeleteSourceResponseData {
+    id: string;
+    deleted: boolean;
+    vectorsRemoved?: boolean;
+    cleanupStatus?: 'pending' | 'none' | 'completed';
+    qdrant?: {
+        deleted?: boolean;
+        status?: string;
+    };
+    requestId?: string;
+}
+
 

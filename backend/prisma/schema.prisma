@@ -55,17 +55,22 @@ model Chat {
     failedAt       DateTime?     @map("failed_at")
     failureReason  String?       @map("failure_reason")
     collectionName String?       @map("collection_name")
-    shareToken     String?       @unique @map("share_token")
-    deletedAt      DateTime?     @map("deleted_at")
-    createdBy      User          @relation(fields: [userId], references: [id])
-    chatSources    ChatSource[]  @relation("ChatToChatSource")
-    messages       ChatMessage[]
-    usageEvents    UsageEvents[]
-    ingestionRuns  IngestionRun[]
-    auditEvents    AuditEvent[]
+    shareToken            String?        @unique @map("share_token")
+    deletedAt             DateTime?      @map("deleted_at")
+    rocketchatScopeKey    String?        @unique @map("rocketchat_scope_key")
+    rocketchatWorkspaceId String?        @map("rocketchat_workspace_id")
+    rocketchatRoomId      String?        @map("rocketchat_room_id")
+    rocketchatThreadId    String?        @map("rocketchat_thread_id")
+    createdBy             User           @relation(fields: [userId], references: [id])
+    chatSources           ChatSource[]   @relation("ChatToChatSource")
+    messages              ChatMessage[]
+    usageEvents           UsageEvents[]
+    ingestionRuns         IngestionRun[]
+    auditEvents           AuditEvent[]
 
     @@index([userId, createdAt])
     @@index([status, createdAt])
+    @@index([rocketchatWorkspaceId, rocketchatRoomId, createdAt])
 }
 
 model ChatSource {
@@ -86,9 +91,12 @@ model ChatSource {
     rocketchatRoomId       String?        @map("rocketchat_room_id")
     rocketchatThreadId     String?        @map("rocketchat_thread_id")
     uploadedByRocketUserId String?        @map("uploaded_by_rocket_user_id")
+    embeddingModel         String?        @map("embedding_model")
+    embeddingDimensions    Int?           @map("embedding_dimensions")
+    dedupeKey              String?        @unique @map("dedupe_key")
 
-    @@unique([documentationUrl, isVectorLess])
     @@index([rocketchatWorkspaceId, rocketchatRoomId, createdAt])
+    @@index([documentationUrl])
 }
 
 model IngestionRun {
@@ -209,4 +217,48 @@ model SystemSetting {
     key       String   @unique
     value     String
     updatedAt DateTime @updatedAt @map("updated_at")
+}
+
+model RocketChatIntegrationJob {
+    id          String   @id @unique @default(uuid())
+    type        String
+    workspaceId String   @default("default") @map("workspace_id")
+    roomId      String   @map("room_id")
+    threadId    String?  @map("thread_id")
+    requestId   String   @map("request_id")
+    status      String   @default("PENDING")
+    payload     Json
+    attempts    Int      @default(0)
+    error       String?
+    createdAt   DateTime @default(now()) @map("created_at")
+    updatedAt   DateTime @updatedAt @map("updated_at")
+
+    @@unique([workspaceId, requestId, type])
+    @@index([status, createdAt])
+    @@index([workspaceId, roomId, createdAt])
+}
+
+
+enum OutboxStatus {
+    PENDING
+    PROCESSING
+    COMPLETED
+    FAILED
+    DEAD
+}
+
+model QdrantCleanupOutbox {
+    id             String       @id @unique @default(uuid())
+    collectionName String       @map("collection_name")
+    sourceId       String?      @map("source_id")
+    status         OutboxStatus @default(PENDING)
+    attempts       Int          @default(0)
+    maxAttempts    Int          @default(5) @map("max_attempts")
+    lastError      String?      @map("last_error")
+    createdAt      DateTime     @default(now()) @map("created_at")
+    updatedAt      DateTime     @updatedAt @map("updated_at")
+    processedAt    DateTime?    @map("processed_at")
+
+    @@index([status, createdAt])
+    @@index([collectionName])
 }

@@ -75,7 +75,13 @@ export class ViewSubmitHandler {
                 }
 
                 try {
-                    await client.deleteSource(sourceId, workspaceId, roomId, 'room', requestId);
+                    const canManage = Boolean(
+                        (user as any).roles?.some((r: string) => ['admin', 'moderator', 'owner', 'leader'].includes(r.toLowerCase())),
+                    );
+                    await client.deleteSource(sourceId, workspaceId, roomId, 'room', requestId, {
+                        actorRocketUserId: user.id,
+                        canManageSources: canManage,
+                    });
 
                     this.logger.completed('delete_source', {
                         event: 'source.delete.completed',

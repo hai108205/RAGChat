@@ -292,6 +292,7 @@ const addChatSource = asyncHandler(async (req: Request, res: Response) => {
                               heading: title || chat.name,
                           }),
                     isVectorLess: isVectorLessChat,
+                    dedupeKey: `${normalizedUrl}::${isVectorLessChat}`,
                     scrapeLimit: scrapeLimit ? Number(scrapeLimit) : null,
                 },
                 include: {
@@ -306,10 +307,7 @@ const addChatSource = asyncHandler(async (req: Request, res: Response) => {
                 // Unique constraint violation
                 chatSource = await prisma.chatSource.findUnique({
                     where: {
-                        documentationUrl_isVectorLess: {
-                            documentationUrl: normalizedUrl,
-                            isVectorLess: isVectorLessChat,
-                        },
+                        dedupeKey: `${normalizedUrl}::${isVectorLessChat}`,
                     },
                     include: {
                         _count: { select: { pagesIndexed: true } },

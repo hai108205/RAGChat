@@ -80,6 +80,31 @@ describe("E2E Test Suite 4: All Slash Commands & Interaction Handlers", () => {
             expect(asyncReq?.options?.data?.callbackUrl).toContain("/api/apps/public/8a800b09-3cc1-4bc1-8dbf-12592fc223eb/callback");
         });
 
+        it("/ask honors configured model, temperature, and embedding-model settings", async () => {
+            harness.mockRead.setSetting("model", "anthropic/claude-3-5-sonnet");
+            harness.mockRead.setSetting("temperature", 0.3);
+            harness.mockRead.setSetting("embedding-model", "openai/text-embedding-3-large");
+
+            harness.mockHttp.registerMockResponse({
+                url: "/api/v1/integrations/rocketchat/messages/async",
+                method: "post",
+                statusCode: 202,
+                data: { status: "accepted", job_id: "ask-settings-job" },
+            });
+
+            const askCmd = new AskCommand(harness.mockLogger);
+            const ctx = new SlashCommandContext(testUser, channelRoom, ["Explain", "settings"]);
+
+            await askCmd.executor(ctx, harness.mockRead, harness.mockModify, harness.mockHttp, harness.mockPersistence);
+
+            const recorded = harness.mockHttp.getRecordedRequests();
+            const asyncReq = recorded.find((r) => r.url.includes("/messages/async"));
+            expect(asyncReq).toBeDefined();
+            expect(asyncReq?.options?.data?.model).toBe("anthropic/claude-3-5-sonnet");
+            expect(asyncReq?.options?.data?.temperature).toBe(0.3);
+            expect(asyncReq?.options?.data?.embeddingModel).toBe("openai/text-embedding-3-large");
+        });
+
         it("/ask rejects empty questions and sends usage warning", async () => {
             const askCmd = new AskCommand(harness.mockLogger);
             const ctx = new SlashCommandContext(testUser, channelRoom, []);
@@ -314,6 +339,56 @@ describe("E2E Test Suite 4: All Slash Commands & Interaction Handlers", () => {
             const uploadReq = recorded.find((r) => r.url.includes("/sources/base64"));
             expect(uploadReq).toBeDefined();
             expect(uploadReq?.options?.data?.filename).toBe("sample.pdf");
+        });
+
+        it("FileUploadHandler rejects oversized files (>7 MiB) and posts room warning", async () => {
+            const handler = new FileUploadHandler(harness.mockLogger);
+            const largeBuffer = Buffer.alloc(8 * 1024 * 1024, "a");
+            const uploadContext = {
+                file: {
+                    id: "upload-large",
+                    name: "large_document.pdf",
+                    type: "application/pdf",
+                    size: 8 * 1024 * 1024,
+                    rid: "test-room-id",
+                    userId: "test-user-id",
+                },
+                content: largeBuffer,
+            };
+
+            await handler.executePreFileUpload(uploadContext as any, harness.mockRead, harness.mockHttp, harness.mockPersistence, harness.mockModify);
+
+            const recorded = harness.mockHttp.getRecordedRequests();
+            const uploadReq = recorded.find((r) => r.url.includes("/sources/base64") && r.options?.data?.filename === "large_document.pdf");
+            expect(uploadReq).toBeUndefined();
+
+            const messages = Array.from(harness.mockModify.messages.values());
+            expect(messages.some((m) => m.text?.includes("vượt quá giới hạn dung lượng"))).toBe(true);
+        });
+
+        it("FileUploadHandler rejects empty files (0 bytes) and posts room warning", async () => {
+            const handler = new FileUploadHandler(harness.mockLogger);
+            const emptyBuffer = Buffer.alloc(0);
+            const uploadContext = {
+                file: {
+                    id: "upload-empty",
+                    name: "empty.txt",
+                    type: "text/plain",
+                    size: 0,
+                    rid: "test-room-id",
+                    userId: "test-user-id",
+                },
+                content: emptyBuffer,
+            };
+
+            await handler.executePreFileUpload(uploadContext as any, harness.mockRead, harness.mockHttp, harness.mockPersistence, harness.mockModify);
+
+            const recorded = harness.mockHttp.getRecordedRequests();
+            const uploadReq = recorded.find((r) => r.url.includes("/sources/base64") && r.options?.data?.filename === "empty.txt");
+            expect(uploadReq).toBeUndefined();
+
+            const messages = Array.from(harness.mockModify.messages.values());
+            expect(messages.some((m) => m.text?.includes("rỗng (0 bytes)"))).toBe(true);
         });
 
         it("BlockActionHandler handles feedback thumbs up click and submits feedback", async () => {

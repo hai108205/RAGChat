@@ -13,6 +13,10 @@ x-backend-environment: &backend-environment
   REDIS_HOST: redis
   REDIS_PORT: "6379"
   QDRANT_URL: http://qdrant:6333
+  ROCKETCHAT_INTEGRATION_TOKEN: ragchat-integration-token-secret
+  ROCKETCHAT_CALLBACK_BASE_URL: http://rocketchat:3000
+  ROCKETCHAT_CALLBACK_ALLOWED_ORIGINS: http://localhost:3001,http://rocketchat:3000
+
 
 services:
   postgres:
@@ -130,6 +134,36 @@ services:
         condition: service_healthy
       backend-migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - ragchat-network
+
+  integration-worker:
+    image: ragchat-backend:local
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: ragchat-integration-worker
+    command: ["node", "dist/workers/rocketchatIntegrationWorker.js"]
+    env_file: *backend-env-file
+    environment:
+      <<: *backend-environment
+      ROCKETCHAT_WORKER_CONCURRENCY: "5"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      backend-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('ioredis').createClient({host: process.env.REDIS_HOST||'localhost', port: process.env.REDIS_PORT||6379}).ping().then(()=>process.exit(0)).catch(()=>process.exit(1))\" 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
     networks:
       - ragchat-network

@@ -4,8 +4,9 @@ import { RagChatApp } from "../RagChatApp";
 import { CallbackEndpoint } from "../src/api/CallbackEndpoint";
 import { RoomType } from "@rocket.chat/apps-engine/definition/rooms";
 import { IUser, UserType } from "@rocket.chat/apps-engine/definition/users";
-import { IMessage } from "@rocket.chat/apps-engine/definition/messages";
+import type { IMessage } from "@rocket.chat/apps-engine/definition/messages";
 import { IApiRequest } from "@rocket.chat/apps-engine/definition/api";
+import { RequestMethod } from "@rocket.chat/apps-engine/definition/accessors";
 import { ActionButtonActionId } from "../src/uikit";
 
 describe("E2E Test Suite 6: Full App Integration & Multi-step Lifecycles", () => {
@@ -131,7 +132,7 @@ describe("E2E Test Suite 6: Full App Integration & Multi-step Lifecycles", () =>
             // Step 3: Backend Worker finishes processing and invokes Public Callback Webhook
             const endpoint = new CallbackEndpoint(app);
             const webhookRequest: IApiRequest = {
-                method: "post",
+                method: RequestMethod.POST,
                 headers: {
                     authorization: "Bearer valid-secret-token",
                     "content-type": "application/json",
@@ -170,7 +171,7 @@ describe("E2E Test Suite 6: Full App Integration & Multi-step Lifecycles", () =>
             // Step 4: User clicks 👍 (Thumbs Up Feedback)
             harness.mockHttp.registerMockResponse({
                 url: "/api/v1/integrations/rocketchat/feedback",
-                method: "post",
+                method: RequestMethod.POST,
                 statusCode: 200,
                 data: { success: true },
             });
@@ -217,7 +218,7 @@ describe("E2E Test Suite 6: Full App Integration & Multi-step Lifecycles", () =>
 
             harness.mockHttp.registerMockResponse({
                 url: "/api/v1/integrations/rocketchat/sources/base64",
-                method: "post",
+                method: RequestMethod.POST,
                 statusCode: 202,
                 data: { status: "accepted", sourceId: "src-doc-101", jobId: "upload-job-101" },
             });
@@ -253,7 +254,7 @@ describe("E2E Test Suite 6: Full App Integration & Multi-step Lifecycles", () =>
             // Step 3: Backend Worker notifies completion via Webhook
             const endpoint = new CallbackEndpoint(app);
             const webhookRequest: IApiRequest = {
-                method: "post",
+                method: RequestMethod.POST,
                 headers: {
                     authorization: "Bearer valid-secret-token",
                     "content-type": "application/json",
@@ -292,7 +293,7 @@ describe("E2E Test Suite 6: Full App Integration & Multi-step Lifecycles", () =>
         it("rejects unauthorized webhook callback with 401", async () => {
             const endpoint = new CallbackEndpoint(app);
             const unauthorizedRequest: IApiRequest = {
-                method: "post",
+                method: RequestMethod.POST,
                 headers: {
                     authorization: "Bearer invalid-token",
                 },
@@ -319,7 +320,7 @@ describe("E2E Test Suite 6: Full App Integration & Multi-step Lifecycles", () =>
         it("rejects malformed callback payload with 400", async () => {
             const endpoint = new CallbackEndpoint(app);
             const badRequest: IApiRequest = {
-                method: "post",
+                method: RequestMethod.POST,
                 headers: {
                     authorization: "Bearer valid-secret-token",
                 },
@@ -350,7 +351,7 @@ describe("E2E Test Suite 6: Full App Integration & Multi-step Lifecycles", () =>
 
             const endpoint = new CallbackEndpoint(app);
             const failRequest: IApiRequest = {
-                method: "post",
+                method: RequestMethod.POST,
                 headers: {
                     authorization: "Bearer valid-secret-token",
                 },

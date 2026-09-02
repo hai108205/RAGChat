@@ -1,5 +1,6 @@
-import { IAppInfo } from '@rocket.chat/apps-engine/definition/metadata';
-import { ILogger } from '@rocket.chat/apps-engine/definition/accessors';
+import type { IAppInfo } from '@rocket.chat/apps-engine/definition/metadata';
+import { AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
+import type { ILogger } from '@rocket.chat/apps-engine/definition/accessors';
 import { RagChatApp } from '../../RagChatApp';
 import { MockRead } from './MockRead';
 import { MockModify } from './MockModify';
@@ -7,22 +8,26 @@ import { MockHttp } from './MockHttp';
 import { MockPersistence } from './MockPersistence';
 
 export class MockLogger implements ILogger {
+    public method: `${AppMethod}` = AppMethod._CONSTRUCTOR;
     public debugs: any[] = [];
     public infos: any[] = [];
     public warns: any[] = [];
     public errors: any[] = [];
     public allLogs: any[] = [];
+    private startTime: Date = new Date();
+    private endTime: Date = new Date();
 
     debug(...args: any[]): void { this.debugs.push(args); this.allLogs.push(['debug', ...args]); }
     info(...args: any[]): void { this.infos.push(args); this.allLogs.push(['info', ...args]); }
     warn(...args: any[]): void { this.warns.push(args); this.allLogs.push(['warn', ...args]); }
     error(...args: any[]): void { this.errors.push(args); this.allLogs.push(['error', ...args]); }
     log(...args: any[]): void { this.infos.push(args); this.allLogs.push(['info', ...args]); }
-    getMethod(): any { return () => {}; }
-    getMethods(): any { return {}; }
+    success(...args: any[]): void { this.infos.push(args); this.allLogs.push(['success', ...args]); }
+    getEntries(): any[] { return []; }
+    getMethod(): `${AppMethod}` { return this.method; }
     getTotalTime(): number { return 0; }
-    getStartTime(): Date { return new Date(); }
-    getEndTime(): Date { return new Date(); }
+    getStartTime(): Date { return this.startTime; }
+    getEndTime(): Date { return this.endTime; }
 }
 
 export function createTestAppHarness() {
@@ -44,6 +49,9 @@ export function createTestAppHarness() {
             homepage: 'https://github.com/hai108205/RAGChat',
             support: 'support@example.com',
         },
+        classFile: 'RagChatApp.ts',
+        iconFile: 'icon.png',
+        implements: [],
     };
 
     const accessors = {
@@ -71,3 +79,5 @@ export function createTestAppHarness() {
         mockLogger,
     };
 }
+
+export type TestHarness = ReturnType<typeof createTestAppHarness>;

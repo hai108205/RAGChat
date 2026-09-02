@@ -4,6 +4,16 @@
 export const ERRORS = {
     BACKEND_UNAVAILABLE:
         '⚠️ AI service is currently unavailable. Please try again later.',
+    AUTH_ERROR:
+        '🔒 Authentication failed. Please verify the integration token and settings.',
+    RATE_LIMIT:
+        '⏳ Rate limit exceeded. Please wait a moment before trying again.',
+    TIMEOUT:
+        '⏱️ The request timed out. Please try again.',
+    GATEWAY_TIMEOUT:
+        '⏱️ Request timed out waiting for AI backend. Please try again.',
+    SERVER_ERROR:
+        '⚠️ Backend service encountered an internal error. Please try again later.',
     NO_QUERY:
         'Please provide a question. Usage: `/ask "your question"`',
     NO_SEARCH_QUERY:

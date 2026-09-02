@@ -270,6 +270,10 @@ export interface components {
         };
         SourcesListResponseData: {
             sources: components["schemas"]["SourceDocument"][];
+            /** @example c0a80123-0000-4000-8000-000000000002 */
+            nextCursor?: string | null;
+            /** @example false */
+            hasMore?: boolean;
         };
         SourcesListResponse: {
             /** @example 200 */
@@ -414,6 +418,10 @@ export interface components {
             workspaceId?: string | null;
             /** @example GENERAL */
             roomId?: string | null;
+            /** @example t-456 */
+            threadId?: string | null;
+            /** @example openai/text-embedding-3-small */
+            embeddingModel?: string | null;
             /** @example openai/gpt-4o-mini */
             model?: string | null;
             /**
@@ -427,6 +435,8 @@ export interface components {
             title: string;
             /** @example Matching snippet content... */
             snippet: string;
+            /** @example rocketchat://default/GENERAL/guide.md */
+            pageUrl?: string | null;
             /** @example 0.85 */
             relevance: number;
             metadata?: {
@@ -708,6 +718,10 @@ export interface operations {
                 roomId?: string;
                 threadId?: string;
                 limit?: number;
+                /** @description Optional pagination cursor (source UUID) */
+                cursor?: string;
+                /** @description Scope mode (defaults to room) */
+                mode?: "room" | "global";
             };
             header?: {
                 /** @description Request correlation identifier */

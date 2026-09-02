@@ -660,6 +660,13 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SourceDocument"
+        nextCursor:
+          type: string
+          nullable: true
+          example: "c0a80123-0000-4000-8000-000000000002"
+        hasMore:
+          type: boolean
+          example: false
 
     SourcesListResponse:
       type: object
@@ -927,6 +934,14 @@ components:
           type: string
           nullable: true
           example: "GENERAL"
+        threadId:
+          type: string
+          nullable: true
+          example: "t-456"
+        embeddingModel:
+          type: string
+          nullable: true
+          example: "openai/text-embedding-3-small"
         model:
           type: string
           nullable: true
@@ -951,6 +966,10 @@ components:
         snippet:
           type: string
           example: "Matching snippet content..."
+        pageUrl:
+          type: string
+          nullable: true
+          example: "rocketchat://default/GENERAL/guide.md"
         relevance:
           type: number
           example: 0.85

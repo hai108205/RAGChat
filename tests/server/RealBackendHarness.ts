@@ -1,6 +1,7 @@
 import type { Server } from "http";
-import path from "path";
-import fs from "fs";
+import * as path from "path";
+import * as fs from "fs";
+import * as net from "net";
 
 // Load backend test environment variables pointing to live Docker containers
 const backendEnvPath = path.resolve(__dirname, "../../backend/.env");
@@ -33,6 +34,57 @@ process.env.ROCKETCHAT_INTEGRATION_TOKEN = process.env.ROCKETCHAT_INTEGRATION_TO
 let serverInstance: Server | null = null;
 let serverPort = 8000;
 
+function checkTcpPort(host: string, port: number, timeoutMs = 800): Promise<boolean> {
+    return new Promise((resolve) => {
+        const socket = new net.Socket();
+        let status = false;
+        socket.setTimeout(timeoutMs);
+        socket.once("connect", () => {
+            status = true;
+            socket.destroy();
+            resolve(true);
+        });
+        socket.once("timeout", () => {
+            socket.destroy();
+            resolve(false);
+        });
+        socket.once("error", () => {
+            socket.destroy();
+            resolve(false);
+        });
+        socket.connect(port, host);
+    });
+}
+
+export async function checkBackendInfrastructure(): Promise<{ ok: boolean; missing: string[] }> {
+    const redisHost = process.env.REDIS_HOST || "localhost";
+    const redisPort = Number(process.env.REDIS_PORT) || 6379;
+
+    let pgHost = "localhost";
+    let pgPort = 5433;
+    try {
+        const url = new URL(process.env.DATABASE_URL || "");
+        pgHost = url.hostname || "localhost";
+        pgPort = Number(url.port) || 5432;
+    } catch {
+        // use default
+    }
+
+    const [redisOk, pgOk] = await Promise.all([
+        checkTcpPort(redisHost, redisPort),
+        checkTcpPort(pgHost, pgPort),
+    ]);
+
+    const missing: string[] = [];
+    if (!redisOk) missing.push(`Redis (${redisHost}:${redisPort})`);
+    if (!pgOk) missing.push(`PostgreSQL (${pgHost}:${pgPort})`);
+
+    return {
+        ok: missing.length === 0,
+        missing,
+    };
+}
+
 export async function startRealBackend(): Promise<{ port: number; baseUrl: string; token: string }> {
     if (serverInstance) {
         return {
@@ -42,7 +94,17 @@ export async function startRealBackend(): Promise<{ port: number; baseUrl: strin
         };
     }
 
-    const { app } = await import("../../backend/app.js");
+    const health = await checkBackendInfrastructure();
+    if (!health.ok) {
+        throw new Error(
+            `[RealBackendHarness] Fast-fail preflight: Docker infrastructure is not reachable.\n` +
+            `Unreachable services: ${health.missing.join(", ")}.\n` +
+            `Actionable resolution: Start dependencies with 'docker compose up -d' before running Docker integration tests.`
+        );
+    }
+
+    const backendAppPath = path.resolve(__dirname, "../../backend/app.js");
+    const { app } = await import(backendAppPath);
 
     await new Promise<void>((resolve, reject) => {
         try {

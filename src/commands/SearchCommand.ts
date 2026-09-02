@@ -92,7 +92,7 @@ export class SearchCommand implements ISlashCommand {
         try {
             // 2. Call backend semantic search endpoint
             const client = new BackendClient(http, read, this.logger);
-            const results = await client.search(query, 5, sender.id, room.id, requestId);
+            const results = await client.search(query, 5, sender.id, room.id, requestId, { threadId });
 
             const sources: CitationSource[] = results.map((r) => ({
                 title: r.title,

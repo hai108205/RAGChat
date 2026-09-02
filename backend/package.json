@@ -9,6 +9,7 @@
         "dev": "tsx watch index.ts",
         "start": "node dist/index.js",
         "worker": "tsx chatWorker.ts",
+        "worker:integration": "tsx workers/rocketchatIntegrationWorker.ts",
         "test": "vitest",
         "test:ci": "vitest run",
         "test:contract": "vitest run tests/integration/rocketchat.integration.test.ts",

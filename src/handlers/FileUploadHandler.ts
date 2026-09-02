@@ -13,7 +13,8 @@ import { buildCallbackUrl } from '../utils/CallbackUrl';
 import { Logger } from '../utils/Logger';
 import { createRequestId } from '../utils/RequestId';
 
-const SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.pptx', '.csv', '.xlsx', '.html'];
+const SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.pptx', '.csv', '.xlsx', '.html', '.htm'];
+const MAX_FILE_SIZE_BYTES = 7 * 1024 * 1024; // 7 MiB
 
 /**
  * Intercepts uploaded files and forwards supported documents to the Node.js RAG backend for indexing.
@@ -22,11 +23,12 @@ const SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.pptx', '.csv', '
  *
  * Capabilities:
  * 1. Checks file extension against `SUPPORTED_EXTENSIONS`.
- * 2. Scans existing room knowledge base sources for duplicate / superseded file versions.
- * 3. Sends an interactive warning card if a superseded document is detected, offering 1-click cleanup.
- * 4. Encodes document `Buffer` to base64.
- * 5. Dispatches indexing request asynchronously to `/api/v1/integrations/rocketchat/sources/base64`.
- * 6. Non-blocking: returns normally to allow Rocket.Chat file upload to complete seamlessly.
+ * 2. Preflights file size against `MAX_FILE_SIZE_BYTES` (7 MiB) and empty content.
+ * 3. Scans existing room knowledge base sources for duplicate / superseded file versions.
+ * 4. Sends an interactive warning card if a superseded document is detected, offering 1-click cleanup.
+ * 5. Encodes document `Buffer` to base64.
+ * 6. Dispatches indexing request asynchronously to `/api/v1/integrations/rocketchat/sources/base64`.
+ * 7. Non-blocking: returns normally to allow Rocket.Chat file upload to complete seamlessly.
  */
 export class FileUploadHandler implements IPreFileUpload {
     private logger: Logger;
@@ -59,6 +61,43 @@ export class FileUploadHandler implements IPreFileUpload {
                 operation: 'upload_check',
                 details: { filename: file.name, extension: ext },
             });
+            return;
+        }
+
+        const fileSize = file.size || (content ? content.length : 0);
+        if (fileSize > MAX_FILE_SIZE_BYTES) {
+            this.logger.warn('upload.rejected_file_too_large', {
+                event: 'upload.rejected',
+                operation: 'upload_check',
+                details: { filename: file.name, size: fileSize, maxSize: MAX_FILE_SIZE_BYTES },
+            });
+            const room = await read.getRoomReader().getById(file.rid);
+            if (room) {
+                await sendMessage(
+                    read,
+                    modify,
+                    room,
+                    `⚠️ Tệp **\`${file.name}\`** (${Math.round((fileSize / (1024 * 1024)) * 100) / 100} MiB) vượt quá giới hạn dung lượng tối đa cho phép (${MAX_FILE_SIZE_BYTES / (1024 * 1024)} MiB). Việc lập chỉ mục RAG đã bị bỏ qua.`,
+                );
+            }
+            return;
+        }
+
+        if (!content || content.length === 0) {
+            this.logger.warn('upload.rejected_empty_file', {
+                event: 'upload.rejected',
+                operation: 'upload_check',
+                details: { filename: file.name },
+            });
+            const room = await read.getRoomReader().getById(file.rid);
+            if (room) {
+                await sendMessage(
+                    read,
+                    modify,
+                    room,
+                    `⚠️ Tệp **\`${file.name}\`** rỗng (0 bytes). Việc lập chỉ mục RAG đã bị bỏ qua.`,
+                );
+            }
             return;
         }
 

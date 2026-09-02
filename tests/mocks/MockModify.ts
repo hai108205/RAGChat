@@ -1,22 +1,30 @@
-import {
+import type {
     IModify,
     IModifyCreator,
+    IModifyDeleter,
     IModifyExtender,
     IModifyUpdater,
+    IModerationModify,
     INotifier,
     IUIController,
     IMessageBuilder,
     IMessageExtender,
+    ISchedulerModify,
 } from '@rocket.chat/apps-engine/definition/accessors';
-import { IMessage } from '@rocket.chat/apps-engine/definition/messages';
-import { IRoom } from '@rocket.chat/apps-engine/definition/rooms';
-import { IUser } from '@rocket.chat/apps-engine/definition/users';
-import { BlockBuilder, IUIKitInteractionParam } from '@rocket.chat/apps-engine/definition/uikit';
+import type { IUIKitInteractionParam } from '@rocket.chat/apps-engine/definition/accessors/IUIController';
+import type { IMessage, IMessageAttachment } from '@rocket.chat/apps-engine/definition/messages';
+import type { IRoom } from '@rocket.chat/apps-engine/definition/rooms';
+import type { IUser } from '@rocket.chat/apps-engine/definition/users';
+import { BlockBuilder, type IBlock } from '@rocket.chat/apps-engine/definition/uikit';
+import { RocketChatAssociationModel } from '@rocket.chat/apps-engine/definition/metadata';
+import type { LayoutBlock } from '@rocket.chat/ui-kit';
 
 export class MockMessageBuilder implements IMessageBuilder {
+    public kind: RocketChatAssociationModel.MESSAGE = RocketChatAssociationModel.MESSAGE;
     private msg: Partial<IMessage> = {
         attachments: [],
         blocks: [],
+        customFields: {},
     };
 
     constructor(initial?: Partial<IMessage>) {
@@ -25,6 +33,11 @@ export class MockMessageBuilder implements IMessageBuilder {
 
     public setData(data: IMessage): IMessageBuilder {
         this.msg = { ...data };
+        return this;
+    }
+
+    public setUpdateData(message: IMessage, editor: IUser): IMessageBuilder {
+        this.msg = { ...message, editor };
         return this;
     }
 
@@ -100,6 +113,15 @@ export class MockMessageBuilder implements IMessageBuilder {
         return this.msg.avatarUrl || '';
     }
 
+    public setEmojiAvatar(emoji: string): IMessageBuilder {
+        this.msg.emoji = emoji;
+        return this;
+    }
+
+    public getEmojiAvatar(): string {
+        return this.msg.emoji || '';
+    }
+
     public setUsernameAlias(usernameAlias: string): IMessageBuilder {
         this.msg.alias = usernameAlias;
         return this;
@@ -118,37 +140,65 @@ export class MockMessageBuilder implements IMessageBuilder {
         return this.msg.emoji || '';
     }
 
-    public addAttachment(attachment: any): IMessageBuilder {
+    public addAttachment(attachment: IMessageAttachment): IMessageBuilder {
         if (!this.msg.attachments) this.msg.attachments = [];
         this.msg.attachments.push(attachment);
         return this;
     }
 
-    public setAttachments(attachments: any[]): IMessageBuilder {
+    public setAttachments(attachments: Array<IMessageAttachment>): IMessageBuilder {
         this.msg.attachments = attachments;
         return this;
     }
 
-    public getAttachments(): any[] {
+    public getAttachments(): Array<IMessageAttachment> {
         return this.msg.attachments || [];
     }
 
-    public addBlocks(blocks: any): IMessageBuilder {
-        const bl = blocks?.getBlocks ? blocks.getBlocks() : blocks;
+    public replaceAttachment(position: number, attachment: IMessageAttachment): IMessageBuilder {
+        if (!this.msg.attachments || position < 0 || position >= this.msg.attachments.length) {
+            throw new Error('Attachment position out of bounds');
+        }
+        this.msg.attachments[position] = attachment;
+        return this;
+    }
+
+    public removeAttachment(position: number): IMessageBuilder {
+        if (!this.msg.attachments || position < 0 || position >= this.msg.attachments.length) {
+            throw new Error('Attachment position out of bounds');
+        }
+        this.msg.attachments.splice(position, 1);
+        return this;
+    }
+
+    public addBlocks(blocks: BlockBuilder | Array<IBlock | LayoutBlock>): IMessageBuilder {
+        const bl = (blocks as any)?.getBlocks ? (blocks as any).getBlocks() : blocks;
         if (Array.isArray(bl)) {
             this.msg.blocks = [...(this.msg.blocks || []), ...bl];
         }
         return this;
     }
 
-    public setBlocks(blocks: any): IMessageBuilder {
-        const bl = blocks?.getBlocks ? blocks.getBlocks() : blocks;
+    public setBlocks(blocks: BlockBuilder | Array<IBlock | LayoutBlock>): IMessageBuilder {
+        const bl = (blocks as any)?.getBlocks ? (blocks as any).getBlocks() : blocks;
         this.msg.blocks = Array.isArray(bl) ? bl : [];
         return this;
     }
 
-    public getBlocks(): any[] {
-        return this.msg.blocks || [];
+    public getBlocks(): Array<IBlock | LayoutBlock> {
+        return (this.msg.blocks || []) as Array<IBlock | LayoutBlock>;
+    }
+
+    public addCustomField(key: string, value: any): IMessageBuilder {
+        if (!this.msg.customFields) this.msg.customFields = {};
+        if (key in this.msg.customFields) {
+            throw new Error(`Custom field ${key} already exists`);
+        }
+        if (key.includes('.')) {
+            throw new Error(`Custom field ${key} cannot contain periods`);
+        }
+        this.msg.customFields[key] = value;
+        return this;
     }
 
     public getMessage(): IMessage {
@@ -219,13 +269,24 @@ export class MockModify implements IModify {
         } as any;
     }
 
+    public getDeleter(): IModifyDeleter {
+        return {
+            deleteRoom: async (_roomId: string): Promise<void> => {},
+            deleteUsers: async (_appId: any, _userType: any): Promise<boolean> => true,
+            deleteMessage: async (message: IMessage, _user: IUser): Promise<void> => {
+                if (message.id) this.messages.delete(message.id);
+            },
+            removeUsersFromRoom: async (_roomId: string, _usernames: string[]): Promise<void> => {},
+        };
+    }
+
     public getNotifier(): INotifier {
         return {
             notifyUser: async (user: IUser, message: IMessage): Promise<void> => {
                 this.notifications.push({ user, message });
                 if (message.id) this.messages.set(message.id, message);
             },
-            notifyRoom: async (room: IRoom, message: IMessage): Promise<void> => {
+            notifyRoom: async (_room: IRoom, message: IMessage): Promise<void> => {
                 this.messages.set(message.id || `notify_${Date.now()}`, message);
             },
             getMessageBuilder: () => new MockMessageBuilder(),
@@ -243,11 +304,20 @@ export class MockModify implements IModify {
             },
             openContextualBarView: async () => {},
             updateContextualBarView: async () => {},
+            openSurfaceView: async () => {},
+            updateSurfaceView: async () => {},
             setViewError: async () => {},
-            formatActionButton: () => ({} as any),
-        } as any;
+        };
+    }
+
+    public getModerationModifier(): IModerationModify {
+        return {
+            report: async () => {},
+            dismissReportsByMessageId: async () => {},
+            dismissReportsByUserId: async () => {},
+        };
     }
 
     public getOAuthAppsModifier(): any { return {} as any; }
-    public getScheduler(): any { return {} as any; }
+    public getScheduler(): ISchedulerModify { return {} as any; }
 }

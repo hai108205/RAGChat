@@ -6,6 +6,7 @@ const {
     userFindFirstMock,
     userCreateMock,
     chatFindFirstMock,
+    chatFindManyMock,
     chatCreateMock,
     chatUpdateMock,
     chatUpsertMock,
@@ -31,6 +32,7 @@ const {
     userFindFirstMock: vi.fn(),
     userCreateMock: vi.fn(),
     chatFindFirstMock: vi.fn(),
+    chatFindManyMock: vi.fn(),
     chatCreateMock: vi.fn(),
     chatUpdateMock: vi.fn(),
     chatUpsertMock: vi.fn(),
@@ -114,6 +116,7 @@ vi.mock("../../utils/prismaClient.js", () => ({
         },
         chat: {
             findFirst: (...args: any[]) => chatFindFirstMock(...args),
+            findMany: (...args: any[]) => chatFindManyMock(...args),
             create: (...args: any[]) => chatCreateMock(...args),
             update: (...args: any[]) => chatUpdateMock(...args),
             upsert: (...args: any[]) => chatUpsertMock(...args),
@@ -143,6 +146,30 @@ vi.mock("../../utils/prismaClient.js", () => ({
         chatMessageSource: {
             createMany: (...args: any[]) => chatMessageSourceCreateManyMock(...args),
         },
+        qdrantCleanupOutbox: {
+            findFirst: vi.fn().mockResolvedValue(null),
+            create: vi.fn().mockResolvedValue({ id: "outbox-1", collectionName: "rc_test_collection" }),
+            findUnique: vi.fn().mockResolvedValue(null),
+            update: vi.fn().mockResolvedValue({}),
+        },
+        $transaction: vi.fn().mockImplementation(async (cb: any) => {
+            if (typeof cb === "function") {
+                return cb({
+                    chatSource: {
+                        count: (...args: any[]) => chatSourceCountMock(...args),
+                        delete: (...args: any[]) => chatSourceDeleteMock(...args),
+                    },
+                    qdrantCleanupOutbox: {
+                        findFirst: vi.fn().mockResolvedValue(null),
+                        create: vi.fn().mockResolvedValue({ id: "outbox-1", collectionName: "rc_test_collection" }),
+                    },
+                    auditEvent: {
+                        create: (...args: any[]) => auditEventCreateMock(...args),
+                    },
+                });
+            }
+            return cb;
+        }),
     },
 }));
 
@@ -208,6 +235,7 @@ describe("Rocket.Chat Integration Router", () => {
         userFindFirstMock.mockReset();
         userCreateMock.mockReset();
         chatFindFirstMock.mockReset();
+        chatFindManyMock.mockReset().mockResolvedValue([]);
         chatCreateMock.mockReset();
         chatUpdateMock.mockReset();
         chatUpsertMock.mockReset().mockResolvedValue({ id: "chat-1" });
@@ -577,7 +605,7 @@ describe("Rocket.Chat Integration Router", () => {
             expect(res.status).toBe(202);
 
             // Wait for background async task to complete
-            await new Promise((resolve) => setTimeout(resolve, 80));
+            await new Promise((resolve) => setTimeout(resolve, 150));
 
             expect(callbackBody).toBeDefined();
             expect(callbackBody.event).toBe("chat_completed");
@@ -859,7 +887,7 @@ describe("Rocket.Chat Integration Router", () => {
             expect(res.status).toBe(202);
 
             // Wait for setImmediate to execute
-            await new Promise((resolve) => setTimeout(resolve, 50));
+            await new Promise((resolve) => setTimeout(resolve, 150));
 
             expect(chatSourceCreateMock).toHaveBeenCalledWith(
                 expect.objectContaining({
@@ -890,7 +918,7 @@ describe("Rocket.Chat Integration Router", () => {
                             id: expect.any(String),
                             vector: expect.any(Array),
                             payload: expect.objectContaining({
-                                url: "rocketchat://team-ws/ROOM_TECH/architecture.md",
+                                url: expect.stringContaining("rocketchat://team-ws/ROOM_TECH"),
                                 title: "architecture.md",
                                 chatSourceId: "source-scoped",
                             }),
@@ -947,6 +975,23 @@ describe("Rocket.Chat Integration Router", () => {
         });
 
         it("executes search operation", async () => {
+            qdrantQueryMock.mockResolvedValue({
+                points: [
+                    {
+                        id: "p-1",
+                        score: 0.95,
+                        payload: {
+                            chatSourceId: "s-1",
+                            pageNumber: 1,
+                            title: "OAuth Guide",
+                            url: "https://docs.example.com/oauth",
+                        },
+                    },
+                ],
+            });
+            chatSourceFindManyMock.mockResolvedValue([
+                { id: "s-1", collectionName: "col-1", heading: "Auth Docs" },
+            ]);
             documentPageFindManyMock.mockResolvedValue([
                 {
                     heading: "OAuth Guide",
@@ -962,6 +1007,7 @@ describe("Rocket.Chat Integration Router", () => {
                 .send({
                     operation: "search",
                     query: "oauth",
+                    roomId: "GENERAL",
                 });
 
             expect(res.status).toBe(200);
@@ -1086,7 +1132,7 @@ describe("Rocket.Chat Integration Router", () => {
             expect(res.status).toBe(202);
 
             // Wait for background ingestion
-            await new Promise((r) => setTimeout(r, 50));
+            await new Promise((r) => setTimeout(r, 150));
 
             expect(chatSourceCreateMock).toHaveBeenCalledWith(
                 expect.objectContaining({

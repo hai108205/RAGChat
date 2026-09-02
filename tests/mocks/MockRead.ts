@@ -1,15 +1,28 @@
-import {
+import type {
+    ICloudWorkspaceRead,
     IEnvironmentRead,
-    IRead,
-    IRoomRead,
-    ISettingRead,
-    IUserRead,
-    IUploadRead,
+    IEnvironmentalVariableRead,
+    IExperimentalRead,
+    ILivechatRead,
+    IMessageRead,
+    INotifier,
     IPersistenceRead,
+    IRead,
+    IRoleRead,
+    IRoomRead,
+    IServerSettingRead,
+    ISettingRead,
+    IUploadRead,
+    IUserRead,
+    IVideoConferenceRead,
 } from '@rocket.chat/apps-engine/definition/accessors';
-import { IRoom, RoomType } from '@rocket.chat/apps-engine/definition/rooms';
-import { IUser, UserType } from '@rocket.chat/apps-engine/definition/users';
-import { RocketChatAssociationModel, RocketChatAssociationRecord } from '@rocket.chat/apps-engine/definition/metadata';
+import type { IRoom } from '@rocket.chat/apps-engine/definition/rooms';
+import { RoomType } from '@rocket.chat/apps-engine/definition/rooms';
+import type { IUser } from '@rocket.chat/apps-engine/definition/users';
+import { UserStatusConnection, UserType } from '@rocket.chat/apps-engine/definition/users';
+import type { RocketChatAssociationRecord } from '@rocket.chat/apps-engine/definition/metadata';
+import type { ISetting } from '@rocket.chat/apps-engine/definition/settings';
+import { SettingType } from '@rocket.chat/apps-engine/definition/settings';
 
 export class MockRead implements IRead {
     private settings: Map<string, any> = new Map();
@@ -17,6 +30,7 @@ export class MockRead implements IRead {
     private rooms: Map<string, IRoom> = new Map();
     private uploadBuffers: Map<string, Buffer> = new Map();
     public persistenceStore: Map<string, any[]> = new Map();
+    private messages: Map<string, any> = new Map();
 
     constructor() {
         // Defaults for RAGChat App
@@ -31,12 +45,13 @@ export class MockRead implements IRead {
             roles: ['bot', 'app'],
             type: UserType.BOT,
             status: 'online',
-            active: true,
+            statusConnection: UserStatusConnection.ONLINE,
+            isEnabled: true,
             createdAt: new Date(),
             updatedAt: new Date(),
+            lastLoginAt: new Date(),
+            utcOffset: 0,
             emails: [],
-            isEnabled: true,
-            isLocked: false,
         };
         this.users.set('ragchat-bot-id', botUser);
         this.users.set('ragchat.bot', botUser);
@@ -48,12 +63,13 @@ export class MockRead implements IRead {
             roles: ['user'],
             type: UserType.USER,
             status: 'online',
-            active: true,
+            statusConnection: UserStatusConnection.ONLINE,
+            isEnabled: true,
             createdAt: new Date(),
             updatedAt: new Date(),
+            lastLoginAt: new Date(),
+            utcOffset: 0,
             emails: [],
-            isEnabled: true,
-            isLocked: false,
         };
         this.users.set('test-user-id', testUser);
         this.users.set('test.user', testUser);
@@ -64,10 +80,11 @@ export class MockRead implements IRead {
             slugifiedName: 'general',
             type: RoomType.CHANNEL,
             creator: testUser,
+            usernames: ['test.user', 'ragchat.bot'],
             userIds: ['test-user-id', 'ragchat-bot-id'],
             isDefault: true,
             isReadOnly: false,
-            displaySystemForms: false,
+            displaySystemMessages: false,
             updatedAt: new Date(),
             createdAt: new Date(),
         };
@@ -80,10 +97,11 @@ export class MockRead implements IRead {
             slugifiedName: 'dm-ragchat-bot',
             type: RoomType.DIRECT_MESSAGE,
             creator: testUser,
+            usernames: ['test.user', 'ragchat.bot'],
             userIds: ['test-user-id', 'ragchat-bot-id'],
             isDefault: false,
             isReadOnly: false,
-            displaySystemForms: false,
+            displaySystemMessages: false,
             updatedAt: new Date(),
             createdAt: new Date(),
         };
@@ -111,13 +129,17 @@ export class MockRead implements IRead {
         this.uploadBuffers.set(id, buffer);
     }
 
+    public setMessage(id: string, msg: any) {
+        this.messages.set(id, msg);
+    }
+
     public getEnvironmentReader(): IEnvironmentRead {
         return {
             getSettings: (): ISettingRead => ({
                 getValueById: async (id: string) => this.settings.get(id),
-                getSetting: async (id: string) => ({
+                getById: async (id: string): Promise<ISetting> => ({
                     id,
-                    type: 0,
+                    type: SettingType.STRING,
                     packageValue: this.settings.get(id),
                     value: this.settings.get(id),
                     required: false,
@@ -125,41 +147,61 @@ export class MockRead implements IRead {
                     i18nLabel: id,
                     createdAt: new Date(),
                     updatedAt: new Date(),
-                } as any),
-                getAllSettings: async () => [] as any,
-                count: async () => this.settings.size,
+                    section: '',
+                    hidden: false,
+                    i18nDescription: '',
+                }),
             }),
-            getServerSettings: () => ({} as any),
-            getEnvironmentVariables: () => ({} as any),
+            getServerSettings: () => ({} as IServerSettingRead),
+            getEnvironmentVariables: () => ({} as IEnvironmentalVariableRead),
         };
     }
 
     public getUserReader(): IUserRead {
         return {
-            getById: async (id: string) => this.users.get(id) || null,
-            getByUsername: async (username: string) => this.users.get(username) || null,
-            getAppUser: async () => this.users.get('ragchat-bot-id') || null,
+            getById: async (id: string): Promise<IUser> => {
+                const user = this.users.get(id);
+                if (!user) throw new Error(`User not found: ${id}`);
+                return user;
+            },
+            getByUsername: async (username: string): Promise<IUser> => {
+                const user = this.users.get(username);
+                if (!user) throw new Error(`User not found: ${username}`);
+                return user;
+            },
+            getAppUser: async () => this.users.get('ragchat-bot-id'),
             getUserUnreadMessageCount: async () => 0,
+            getBySipExtension: async () => undefined,
+            getUserRoomIds: async () => [],
         };
     }
 
     public getRoomReader(): IRoomRead {
         return {
-            getById: async (id: string) => this.rooms.get(id) || null,
-            getByName: async (name: string) => this.rooms.get(name) || null,
-            getDirectByUsernames: async (usernames: string[]) => {
+            getById: async (id: string): Promise<IRoom | undefined> => this.rooms.get(id),
+            getByName: async (name: string): Promise<IRoom | undefined> => this.rooms.get(name),
+            getCreatorUserById: async (id: string): Promise<IUser | undefined> => {
+                const room = this.rooms.get(id);
+                return room?.creator;
+            },
+            getCreatorUserByName: async (name: string): Promise<IUser | undefined> => {
+                const room = this.rooms.get(name);
+                return room?.creator;
+            },
+            getDirectByUsernames: async (usernames: string[]): Promise<IRoom> => {
                 for (const room of this.rooms.values()) {
                     if (room.type === RoomType.DIRECT_MESSAGE) return room;
                 }
-                return null;
+                throw new Error('Direct room not found');
             },
             getMembers: async () => Array.from(this.users.values()),
-            getMessages: async () => [],
+            getAllRooms: async () => Array.from(this.rooms.values()) as any,
+            getMessages: async () => Array.from(this.messages.values()),
             getModerators: async () => [],
             getOwners: async () => [],
             getLeaders: async () => [],
+            getUnreadByUser: async () => [],
             getUserUnreadMessageCount: async () => 0,
-            getThreads: async () => [],
         };
     }
 
@@ -171,15 +213,15 @@ export class MockRead implements IRead {
         };
 
         return {
-            read: async (association: RocketChatAssociationRecord) => {
+            read: async (id: string): Promise<object> => {
+                const results = this.persistenceStore.get(id) || [];
+                return results[0] || {};
+            },
+            readByAssociation: async (association: RocketChatAssociationRecord): Promise<Array<object>> => {
                 const key = getKey(association);
                 return this.persistenceStore.get(key) || [];
             },
-            readByAssociation: async (association: RocketChatAssociationRecord) => {
-                const key = getKey(association);
-                return this.persistenceStore.get(key) || [];
-            },
-            readByAssociations: async (associations: RocketChatAssociationRecord[]) => {
+            readByAssociations: async (associations: RocketChatAssociationRecord[]): Promise<Array<object>> => {
                 const results: any[] = [];
                 for (const assoc of associations) {
                     const key = getKey(assoc);
@@ -199,25 +241,32 @@ export class MockRead implements IRead {
         };
     }
 
-    private messages: Map<string, any> = new Map();
-
-    public setMessage(id: string, msg: any) {
-        this.messages.set(id, msg);
-    }
-
-    public getMessageReader(): any {
+    public getMessageReader(): IMessageRead {
         return {
             getById: async (id: string) => this.messages.get(id) || null,
             getRoomMessages: async () => Array.from(this.messages.values()),
             getSenderMessages: async () => [],
             getThreadMessages: async () => [],
+            getUnreadUserMessages: async () => [],
+            getUserUnreadMessageCount: async () => 0,
+        } as any;
+    }
+
+    public getThreadReader(): any {
+        return {
+            getById: async (id: string) => this.messages.get(id) || null,
+            getMessages: async () => [],
+            getAllThreadMessages: async () => [],
+            getThreadParticipants: async () => [],
         };
     }
-    public getLivechatReader(): any { return {} as any; }
-    public getModify(): any { return {} as any; }
-    public getNotifier(): any { return {} as any; }
+
+    public getNotifier(): INotifier { return {} as any; }
+    public getLivechatReader(): ILivechatRead { return {} as any; }
+    public getCloudWorkspaceReader(): ICloudWorkspaceRead { return {} as any; }
+    public getVideoConferenceReader(): IVideoConferenceRead { return {} as any; }
     public getOAuthAppsReader(): any { return {} as any; }
-    public getRoleReader(): any { return {} as any; }
-    public getThreadReader(): any { return {} as any; }
-    public getVideoConferenceRead(): any { return {} as any; }
+    public getRoleReader(): IRoleRead { return {} as any; }
+    public getContactReader(): any { return {} as any; }
+    public getExperimentalReader(): IExperimentalRead { return {} as any; }
 }

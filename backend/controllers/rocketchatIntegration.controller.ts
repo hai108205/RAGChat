@@ -14,11 +14,33 @@ import {
     formatRocketChatCitations,
 } from "../utils/rocketchatIdentity.js";
 import {
+    buildRocketChatDocumentationUrl,
+    buildChatSourceScopeWhere,
+    buildStatsScopeWhere,
+    verifySourceDeletionScope,
+    verifyFeedbackScope,
+} from "../utils/rocketchatScope.js";
+import {
     generateVectorEmbeddings,
+    getEmbeddingDimensionsForModel,
     splitDocumentationContent,
 } from "../utils/ragUtilities.js";
 import { qdrant } from "../utils/ragClients.js";
 import { deleteQdrantCollectionSafe } from "../utils/qdrantCleanup.js";
+import {
+    validateAndDecodeBase64,
+    validateFileMetadata,
+} from "../utils/uploadPolicy.js";
+import {
+    parseDocument,
+    DocumentParserError,
+} from "../services/documentParser.js";
+import { scopedVectorSearch } from "../services/scopedVectorSearch.js";
+import { getRocketChatStats } from "../services/rocketchatStats.service.js";
+import { deleteSourceWithCleanup } from "../services/qdrantCleanupOutbox.service.js";
+import { enqueueRocketChatJob } from "../utils/rocketchatQueue.js";
+import { submitRocketChatFeedback } from "../services/rocketchatFeedback.service.js";
+
 
 // In-memory LRU idempotency cache for fast deduplication
 const seenRequests = new Set<string>();
@@ -42,6 +64,116 @@ export interface SendRocketChatCallbackOptions {
 }
 
 /**
+ * Resolves list of trusted origins for Rocket.Chat callbacks from environment variables.
+ */
+export function getTrustedCallbackOrigins(): Set<string> {
+    const trusted = new Set<string>();
+    const originsStr = process.env.ROCKETCHAT_CALLBACK_ALLOWED_ORIGINS;
+    if (originsStr) {
+        originsStr.split(",").forEach((item) => {
+            const trimmed = item.trim();
+            if (trimmed) {
+                try {
+                    const parsed = new URL(trimmed);
+                    trusted.add(parsed.origin.toLowerCase());
+                } catch {
+                    trusted.add(trimmed.toLowerCase());
+                }
+            }
+        });
+    }
+
+    const baseUrlStr = process.env.ROCKETCHAT_CALLBACK_BASE_URL;
+    if (baseUrlStr) {
+        const trimmed = baseUrlStr.trim();
+        if (trimmed) {
+            try {
+                const parsed = new URL(trimmed);
+                trusted.add(parsed.origin.toLowerCase());
+            } catch {
+                trusted.add(trimmed.toLowerCase());
+            }
+        }
+    }
+
+    return trusted;
+}
+
+/**
+ * Validates a Rocket.Chat webhook callback URL against security constraints:
+ * - Must be http: or https:
+ * - Must not contain credentials (username / password)
+ * - Must not contain fragments (#hash)
+ * - In production, must match trusted origins allowlist (or explicit container hostname if configured)
+ */
+export function validateCallbackUrl(callbackUrl: string): { valid: boolean; reason?: string } {
+    if (!callbackUrl || typeof callbackUrl !== "string") {
+        return { valid: false, reason: "Callback URL must be a non-empty string." };
+    }
+
+    let parsed: URL;
+    try {
+        parsed = new URL(callbackUrl);
+    } catch {
+        return { valid: false, reason: "Invalid callback URL format." };
+    }
+
+    // Protocol check: only http and https allowed
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return { valid: false, reason: `Invalid protocol '${parsed.protocol}'; only http: and https: are permitted.` };
+    }
+
+    // Credentials check
+    if (parsed.username || parsed.password) {
+        return { valid: false, reason: "Callback URL must not contain credentials (username or password)." };
+    }
+
+    // Fragment check
+    if (parsed.hash) {
+        return { valid: false, reason: "Callback URL must not contain URL fragments/hashes." };
+    }
+
+    const isProd = process.env.NODE_ENV === "production";
+    const allowDev = process.env.ALLOW_UNAUTHENTICATED_ROCKETCHAT_DEV === "true";
+    const trustedOrigins = getTrustedCallbackOrigins();
+    const origin = parsed.origin.toLowerCase();
+
+    if (trustedOrigins.size > 0) {
+        if (!trustedOrigins.has(origin)) {
+            // Also allow matching host if hostname is configured directly without port or protocol
+            const hostname = parsed.hostname.toLowerCase();
+            const host = parsed.host.toLowerCase();
+            const matchesHost = Array.from(trustedOrigins).some(
+                (trusted) => trusted === hostname || trusted === host || trusted === origin,
+            );
+
+            if (!matchesHost) {
+                return {
+                    valid: false,
+                    reason: `Callback origin '${origin}' is not in the trusted origins allowlist.`,
+                };
+            }
+        }
+    } else if (isProd) {
+        return {
+            valid: false,
+            reason: "No trusted callback origins configured in production (ROCKETCHAT_CALLBACK_ALLOWED_ORIGINS or ROCKETCHAT_CALLBACK_BASE_URL).",
+        };
+    } else if (!allowDev) {
+        // In dev without explicit allowDev, if no trusted origins are set, allow localhost/127.0.0.1 or reject
+        const isLocalhost = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1";
+        if (!isLocalhost) {
+            return {
+                valid: false,
+                reason: `Callback origin '${origin}' is not trusted. Set ROCKETCHAT_CALLBACK_ALLOWED_ORIGINS or ALLOW_UNAUTHENTICATED_ROCKETCHAT_DEV=true.`,
+            };
+        }
+    }
+
+    return { valid: true };
+}
+
+/**
  * Sends webhook notification back to Rocket.Chat app
  */
 export async function sendRocketChatCallback(
@@ -51,8 +183,22 @@ export async function sendRocketChatCallback(
 ): Promise<boolean> {
     if (!callbackUrl) {
         logger.debug(
-            { event: payload?.event, requestId: payload?.request_id },
+            { event: payload?.event, requestId: payload?.request_id || payload?.requestId },
             "No callbackUrl provided; skipping Rocket.Chat webhook callback.",
+        );
+        return false;
+    }
+
+    const validation = validateCallbackUrl(callbackUrl);
+    if (!validation.valid) {
+        logger.error(
+            {
+                callbackUrl,
+                reason: validation.reason,
+                event: payload?.event,
+                requestId: payload?.request_id || payload?.requestId,
+            },
+            "Refusing to send Rocket.Chat callback to untrusted/invalid URL.",
         );
         return false;
     }
@@ -64,6 +210,10 @@ export async function sendRocketChatCallback(
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
     };
+    const reqId = payload?.request_id || payload?.requestId;
+    if (reqId) {
+        headers["X-Request-Id"] = reqId;
+    }
     if (token) {
         headers["Authorization"] = `Bearer ${token}`;
     }
@@ -85,7 +235,7 @@ export async function sendRocketChatCallback(
                 logger.info(
                     {
                         event: payload?.event,
-                        requestId: payload?.request_id,
+                        requestId: reqId,
                         attempt,
                         statusCode: res.status,
                     },
@@ -98,7 +248,7 @@ export async function sendRocketChatCallback(
             logger.warn(
                 {
                     event: payload?.event,
-                    requestId: payload?.request_id,
+                    requestId: reqId,
                     attempt,
                     statusCode: res.status,
                     errorText,
@@ -109,7 +259,7 @@ export async function sendRocketChatCallback(
             logger.warn(
                 {
                     event: payload?.event,
-                    requestId: payload?.request_id,
+                    requestId: reqId,
                     attempt,
                     err: err.message,
                 },
@@ -165,36 +315,80 @@ function getLLMClient(): OpenAI {
 }
 
 /**
- * Executes RAG retrieval across any indexed sources linked to the chat
+ * Executes RAG retrieval across any indexed sources linked to the chat and scope
  */
-async function retrieveRelevantSources(chat: any, query: string) {
-    if (!chat?.chatSources?.length) {
-        return [];
+async function retrieveRelevantSources(
+    chat: any,
+    query: string,
+    embeddingModel?: string,
+    scopeParams?: { workspaceId?: string; roomId?: string; threadId?: string | null },
+) {
+    try {
+        const results = await scopedVectorSearch({
+            query,
+            workspaceId: scopeParams?.workspaceId || chat?.rocketchatWorkspaceId || "default",
+            roomId: scopeParams?.roomId || chat?.rocketchatRoomId || "",
+            threadId: scopeParams?.threadId !== undefined ? scopeParams.threadId : chat?.rocketchatThreadId,
+            embeddingModel,
+            topK: 5,
+            minScore: 0.3,
+        });
+
+        if (results && results.length > 0) {
+            return results.map((r) => ({
+                score: r.relevance,
+                payload: {
+                    title: r.title,
+                    body: r.snippet,
+                    url: r.pageUrl,
+                    chunkType: r.metadata?.chunkType,
+                },
+            }));
+        }
+    } catch (err: any) {
+        logger.debug({ err: err.message }, "scopedVectorSearch error during retrieveRelevantSources; falling back");
     }
 
-    let userPromptEmbeddings: any;
-    try {
-        userPromptEmbeddings = await generateVectorEmbeddings(query);
-    } catch {
+    if (!chat?.chatSources?.length) {
         return [];
     }
 
     const allDensePoints: any[] = [];
 
+    // Group sources by embedding model
+    const sourcesByModel = new Map<string, any[]>();
     for (const source of chat.chatSources) {
         if (!source.collectionName) continue;
+        const srcModel = source.embeddingModel || embeddingModel || "openai/text-embedding-3-small";
+        if (!sourcesByModel.has(srcModel)) {
+            sourcesByModel.set(srcModel, []);
+        }
+        sourcesByModel.get(srcModel)!.push(source);
+    }
+
+    for (const [modelName, sources] of sourcesByModel.entries()) {
+        let userPromptEmbeddings: any;
         try {
-            const denseResults = await qdrant.query(source.collectionName, {
-                query: userPromptEmbeddings,
-                limit: 5,
-                with_payload: true,
-                score_threshold: 0.3,
-            });
-            if (denseResults?.points?.length) {
-                allDensePoints.push(...denseResults.points);
-            }
+            userPromptEmbeddings = await generateVectorEmbeddings(query, { model: modelName });
         } catch (e: any) {
-            logger.debug({ err: e.message }, "Qdrant query non-fatal failure");
+            logger.debug({ err: e.message, modelName }, "Embedding generation failure during retrieval");
+            continue;
+        }
+
+        for (const source of sources) {
+            try {
+                const denseResults = await qdrant.query(source.collectionName, {
+                    query: userPromptEmbeddings,
+                    limit: 5,
+                    with_payload: true,
+                    score_threshold: 0.3,
+                });
+                if (denseResults?.points?.length) {
+                    allDensePoints.push(...denseResults.points);
+                }
+            } catch (e: any) {
+                logger.debug({ err: e.message, collection: source.collectionName }, "Qdrant query non-fatal failure");
+            }
         }
     }
 
@@ -206,29 +400,53 @@ async function retrieveRelevantSources(chat: any, query: string) {
  * POST /api/v1/integrations/rocketchat/messages/async
  */
 export const handleAsyncMessage = asyncHandler(async (req: Request, res: Response) => {
+    const canonicalRequestId = (req.id || req.body?.requestId || req.headers["x-request-id"] || crypto.randomUUID()) as string;
     const {
         workspaceId = "default",
         rocketUserId,
         roomId,
         threadId,
         placeholderId,
-        requestId,
         query,
         history = [],
         model,
+        temperature,
+        embeddingModel,
         provider = "DEFAULT",
         callbackUrl,
     } = req.body;
 
-    const isDuplicate = markAndCheckIdempotency(requestId);
+    if (callbackUrl) {
+        const validation = validateCallbackUrl(callbackUrl);
+        if (!validation.valid) {
+            throw new ApiError(400, `Invalid callbackUrl: ${validation.reason}`);
+        }
+    }
+
+    const { jobId, isDuplicate } = await enqueueRocketChatJob("chat", {
+        workspaceId,
+        rocketUserId,
+        roomId,
+        threadId,
+        placeholderId,
+        query,
+        history,
+        model,
+        temperature,
+        embeddingModel,
+        provider,
+        callbackUrl,
+        requestId: canonicalRequestId,
+    });
+
     if (isDuplicate) {
         return res.status(202).json(
             new ApiResponse(
                 202,
                 {
                     status: "accepted",
-                    jobId: `job-${requestId}`,
-                    requestId,
+                    jobId,
+                    requestId: canonicalRequestId,
                     duplicate: true,
                 },
                 "Duplicate message request ignored",
@@ -236,235 +454,44 @@ export const handleAsyncMessage = asyncHandler(async (req: Request, res: Respons
         );
     }
 
-    // Respond immediately with 202 Accepted
-    res.status(202).json(
+    return res.status(202).json(
         new ApiResponse(
             202,
             {
                 status: "accepted",
-                jobId: `job-${requestId}`,
-                requestId,
+                jobId,
+                requestId: canonicalRequestId,
             },
             "Message queued for processing",
         ),
     );
-
-    // Process asynchronous generation in background
-    setImmediate(async () => {
-        const defaultModel =
-            model || process.env.DEFAULT_LLM_MODEL || "openai/gpt-4o-mini";
-
-        try {
-            const user = await getOrCreateRocketChatUser({
-                workspaceId,
-                rocketUserId,
-            });
-            const chat = await getOrCreateRocketChatChat({
-                userId: user.id,
-                roomId,
-                threadId,
-                workspaceId,
-            });
-
-            // 1. Retrieve RAG documentation context
-            const relevantPoints = await retrieveRelevantSources(chat, query);
-            const citations = formatRocketChatCitations(relevantPoints);
-
-            // 2. Build LLM prompt
-            let systemPrompt =
-                "You are RAGChat, an intelligent AI assistant integrated with Rocket.Chat.\n";
-            if (relevantPoints.length > 0) {
-                systemPrompt +=
-                    "Use the following documentation excerpts to answer the question accurately and concisely. Use Markdown formatting.\n\nDOCUMENTATION EXCERPTS:\n";
-                relevantPoints.forEach((pt, i) => {
-                    const title = pt.payload?.title || `Source ${i + 1}`;
-                    const text = pt.payload?.body || pt.payload?.content || "";
-                    systemPrompt += `\n--- [${i + 1}] ${title} ---\n${text}\n`;
-                });
-            } else {
-                systemPrompt +=
-                    "Answer the user's question helpfully and concisely using Markdown formatting.";
-            }
-
-            const messages: any[] = [{ role: "system", content: systemPrompt }];
-
-            if (Array.isArray(history)) {
-                for (const h of history.slice(-6)) {
-                    if (h.role && h.content) {
-                        messages.push({
-                            role: h.role === "user" ? "user" : "assistant",
-                            content: String(h.content),
-                        });
-                    }
-                }
-            }
-
-            messages.push({ role: "user", content: query });
-
-            // 3. Call LLM
-            const openai = getLLMClient();
-            let llmResponse = "";
-            let inputTokens = 0;
-            let outputTokens = 0;
-
-            try {
-                const completion = await openai.chat.completions.create({
-                    model: defaultModel,
-                    messages,
-                });
-                llmResponse =
-                    completion.choices?.[0]?.message?.content ||
-                    "No response received.";
-                if (completion.usage) {
-                    inputTokens = completion.usage.prompt_tokens || 0;
-                    outputTokens = completion.usage.completion_tokens || 0;
-                }
-            } catch (err: any) {
-                logger.error(
-                    { err: err.message, requestId },
-                    "LLM completion error in Rocket.Chat integration",
-                );
-                llmResponse = `Xin lỗi, không thể kết nối tới mô hình AI: ${err.message}`;
-            }
-
-            // 4. Persist message record
-            const chatMessage = await prisma.chatMessage.create({
-                data: {
-                    chatId: chat.id,
-                    userPrompt: query,
-                    llmResponse,
-                    llmModel: defaultModel,
-                },
-            });
-
-            // 5. Persist sources if available
-            if (relevantPoints.length > 0) {
-                await prisma.chatMessageSource.createMany({
-                    data: relevantPoints.map((pt) => ({
-                        chatMessageId: chatMessage.id,
-                        heading: pt.payload?.title || pt.payload?.heading || "Source",
-                        chunkText: pt.payload?.body || pt.payload?.content || "",
-                        pageUrl: pt.payload?.url || pt.payload?.pageUrl || "",
-                        score: Math.round((pt.score || 0) * 100),
-                    })),
-                });
-            }
-
-            // 6. Record usage events and audit logs
-            const usageCost = estimateUsageCostUsd({
-                provider: provider || "DEFAULT",
-                model: defaultModel,
-                inputTokens,
-                outputTokens,
-            });
-
-            await prisma.usageEvents.create({
-                data: {
-                    userId: user.id,
-                    chatId: chat.id,
-                    messageId: chatMessage.id,
-                    inputTokens,
-                    outputTokens,
-                    estimatedCostUsd: usageCost.estimatedCostUsd,
-                    priceVersion: usageCost.priceVersion,
-                },
-            });
-
-            await createAuditEvent("rocketchat.message.sent", user.id, chat.id, {
-                chatMessageId: chatMessage.id,
-                rocketUserId,
-                roomId,
-                threadId,
-                requestId,
-                model: defaultModel,
-            });
-
-            // 7. Dispatch callback to Rocket.Chat
-            const callbackPayload = {
-                event: "chat_completed",
-                request_id: requestId,
-                user_id: rocketUserId,
-                room_id: roomId,
-                thread_id: threadId || undefined,
-                placeholder_id: placeholderId || undefined,
-                chat_message_id: chatMessage.id,
-                query,
-                answer: llmResponse,
-                sources: citations,
-                model: defaultModel,
-            };
-
-            await sendRocketChatCallback(callbackUrl, callbackPayload);
-        } catch (error: any) {
-            logger.error(
-                { err: error.message, stack: error.stack, requestId },
-                "Fatal error processing async Rocket.Chat message",
-            );
-
-            const failurePayload = {
-                event: "chat_failed",
-                request_id: requestId,
-                user_id: rocketUserId,
-                room_id: roomId,
-                thread_id: threadId || undefined,
-                placeholder_id: placeholderId || undefined,
-                query,
-                error: error.message || "Internal processing error",
-            };
-
-            await sendRocketChatCallback(callbackUrl, failurePayload);
-        }
-    });
 });
 
 /**
  * GET /api/v1/integrations/rocketchat/stats
  */
 export const getStats = asyncHandler(async (req: Request, res: Response) => {
-    const sources = await prisma.chatSource.findMany({
-        orderBy: { createdAt: "desc" },
-        take: 50,
-        select: {
-            id: true,
-            heading: true,
-            documentationUrl: true,
-            totalPages: true,
-            createdAt: true,
-            lastIndexedAt: true,
-            _count: {
-                select: { pagesIndexed: true },
-            },
-        },
+    const {
+        workspaceId = "default",
+        roomId,
+        threadId,
+        mode = "room",
+    } = req.query as any;
+
+    const statsResult = await getRocketChatStats({
+        workspaceId,
+        roomId,
+        threadId,
+        mode,
+        allowGlobal: process.env.ALLOW_ROCKETCHAT_GLOBAL_MODE === "true",
     });
-
-    const documents = sources.map((s) => ({
-        id: s.id,
-        filename: s.heading || s.documentationUrl || "Document",
-        chunks_count: s._count?.pagesIndexed || s.totalPages || 0,
-        created_at: s.createdAt ? s.createdAt.toISOString() : undefined,
-    }));
-
-    const usageAggregate = await prisma.usageEvents.aggregate({
-        _sum: {
-            inputTokens: true,
-            outputTokens: true,
-        },
-    });
-
-    const inputTokens = usageAggregate._sum.inputTokens || 0;
-    const outputTokens = usageAggregate._sum.outputTokens || 0;
 
     return res.status(200).json(
         new ApiResponse(
             200,
             {
-                documents,
-                chats: [],
-                usage: {
-                    inputTokens,
-                    outputTokens,
-                    totalTokens: inputTokens + outputTokens,
-                },
+                ...statsResult,
+                requestId: req.id,
             },
             "Integration stats retrieved successfully",
         ),
@@ -479,53 +506,31 @@ export const listSources = asyncHandler(async (req: Request, res: Response) => {
         workspaceId = "default",
         roomId,
         threadId,
+        mode = "room",
         limit = 50,
+        cursor,
     } = req.query as any;
 
-    const parsedLimit = Number(limit) || 50;
+    const parsedLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
 
-    let whereClause: any = {};
-
-    if (roomId) {
-        whereClause = {
-            OR: [
-                {
-                    rocketchatWorkspaceId: workspaceId || "default",
-                    rocketchatRoomId: roomId,
-                    ...(threadId
-                        ? {
-                              OR: [
-                                  { rocketchatThreadId: threadId },
-                                  { rocketchatThreadId: null },
-                              ],
-                          }
-                        : {}),
-                },
-                {
-                    rocketchatRoomId: null,
-                    documentationUrl: {
-                        startsWith: `rocketchat://${workspaceId || "default"}/${roomId}/`,
-                    },
-                },
-            ],
-        };
-    } else if (workspaceId) {
-        whereClause = {
-            OR: [
-                { rocketchatWorkspaceId: workspaceId },
-                {
-                    documentationUrl: {
-                        startsWith: `rocketchat://${workspaceId}/`,
-                    },
-                },
-            ],
-        };
-    }
+    const whereClause = buildChatSourceScopeWhere({
+        workspaceId,
+        roomId,
+        threadId,
+        mode,
+        allowGlobal: process.env.ALLOW_ROCKETCHAT_GLOBAL_MODE === "true",
+    });
 
     const sources = await prisma.chatSource.findMany({
         where: whereClause,
-        orderBy: { createdAt: "desc" },
-        take: parsedLimit,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: parsedLimit + 1,
+        ...(cursor
+            ? {
+                  cursor: { id: cursor },
+                  skip: 1,
+              }
+            : {}),
         select: {
             id: true,
             heading: true,
@@ -533,13 +538,19 @@ export const listSources = asyncHandler(async (req: Request, res: Response) => {
             totalPages: true,
             createdAt: true,
             lastIndexedAt: true,
+            embeddingModel: true,
+            embeddingDimensions: true,
             _count: {
                 select: { pagesIndexed: true },
             },
         },
     });
 
-    const formattedSources = sources.map((s) => {
+    const hasMore = sources.length > parsedLimit;
+    const paginatedSources = hasMore ? sources.slice(0, parsedLimit) : sources;
+    const nextCursor = hasMore ? paginatedSources[paginatedSources.length - 1]?.id : undefined;
+
+    const formattedSources = paginatedSources.map((s) => {
         const chunksCount = s._count?.pagesIndexed || s.totalPages || 0;
         return {
             id: s.id,
@@ -550,13 +561,20 @@ export const listSources = asyncHandler(async (req: Request, res: Response) => {
             createdAt: s.createdAt ? s.createdAt.toISOString() : undefined,
             lastIndexedAt: s.lastIndexedAt ? s.lastIndexedAt.toISOString() : undefined,
             status: chunksCount > 0 ? "ACTIVE" : "EMPTY",
+            embeddingModel: s.embeddingModel,
+            embeddingDimensions: s.embeddingDimensions,
         };
     });
 
     return res.status(200).json(
         new ApiResponse(
             200,
-            { sources: formattedSources },
+            {
+                sources: formattedSources,
+                nextCursor,
+                hasMore,
+                requestId: req.id,
+            },
             "Sources retrieved successfully",
         ),
     );
@@ -571,71 +589,27 @@ export const deleteSource = asyncHandler(async (req: Request, res: Response) => 
         workspaceId = "default",
         roomId,
         mode = "room",
+        actorRocketUserId,
+        canManageSources,
     } = req.query as any;
 
-    if (!sourceId) {
-        throw new ApiError(400, "Source ID is required");
-    }
-
-    if (mode === "room" && (!roomId || !workspaceId)) {
-        throw new ApiError(400, "workspaceId and roomId are required for room-scoped source deletion");
-    }
-
-    const source = await prisma.chatSource.findUnique({
-        where: { id: sourceId },
-    });
-
-    if (!source) {
-        throw new ApiError(404, "Source not found");
-    }
-
-    if (mode === "room") {
-        const matchesExplicit =
-            source.rocketchatRoomId === roomId &&
-            (source.rocketchatWorkspaceId === workspaceId ||
-                (!source.rocketchatWorkspaceId && workspaceId === "default"));
-
-        const matchesLegacy =
-            !source.rocketchatRoomId &&
-            source.documentationUrl.startsWith(
-                `rocketchat://${workspaceId || "default"}/${roomId}/`,
-            );
-
-        if (!matchesExplicit && !matchesLegacy) {
-            throw new ApiError(403, "Source does not belong to the specified workspace and room");
-        }
-    }
-
-    let vectorsRemoved = false;
-    let qdrantResult: any = { deleted: false };
-
-    if (source.collectionName) {
-        const otherSourcesCount = await prisma.chatSource.count({
-            where: {
-                collectionName: source.collectionName,
-                id: { not: source.id },
-            },
-        });
-
-        if (otherSourcesCount === 0) {
-            const cleanupRes = await deleteQdrantCollectionSafe(source.collectionName);
-            qdrantResult = cleanupRes;
-            vectorsRemoved = cleanupRes.deleted;
-        }
-    }
-
-    await prisma.chatSource.delete({
-        where: { id: source.id },
+    const result = await deleteSourceWithCleanup({
+        sourceId,
+        workspaceId,
+        roomId,
+        mode,
+        allowGlobal: process.env.ALLOW_ROCKETCHAT_GLOBAL_MODE === "true",
+        actorRocketUserId,
+        canManageSources,
+        requestId: req.id,
     });
 
     return res.status(200).json(
         new ApiResponse(
             200,
             {
-                id: source.id,
-                deleted: true,
-                vectorsRemoved,
-                qdrant: qdrantResult,
+                ...result,
+                requestId: req.id,
             },
             "Source deleted successfully",
         ),
@@ -652,43 +626,29 @@ export const submitFeedback = asyncHandler(async (req: Request, res: Response) =
         rating,
         feedbackText,
         rocketUserId,
+        actorRocketUserId,
         workspaceId = "default",
         roomId,
     } = req.body;
 
-    const user = await getOrCreateRocketChatUser({
-        workspaceId,
-        rocketUserId,
-    });
-
-    let chatIdOrNull: string | null = null;
-    if (chatMessageId) {
-        const msg = await prisma.chatMessage.findUnique({
-            where: { id: chatMessageId },
-            select: { chatId: true },
-        });
-        if (msg) {
-            chatIdOrNull = msg.chatId;
-        }
-    }
-
-    await createAuditEvent("rocketchat.feedback", user.id, chatIdOrNull, {
+    const result = await submitRocketChatFeedback({
         messageId,
         chatMessageId,
         rating,
         feedbackText,
         rocketUserId,
+        actorRocketUserId,
         workspaceId,
         roomId,
+        requestId: req.id,
     });
 
     return res.status(200).json(
         new ApiResponse(
             200,
             {
-                recorded: true,
-                rating,
-                chatMessageId,
+                ...result,
+                requestId: req.id,
             },
             "Feedback recorded successfully",
         ),
@@ -699,6 +659,7 @@ export const submitFeedback = asyncHandler(async (req: Request, res: Response) =
  * POST /api/v1/integrations/rocketchat/sources/base64
  */
 export const handleBase64Source = asyncHandler(async (req: Request, res: Response) => {
+    const canonicalRequestId = (req.id || req.body?.requestId || req.headers["x-request-id"] || crypto.randomUUID()) as string;
     const {
         workspaceId = "default",
         rocketUserId,
@@ -706,126 +667,61 @@ export const handleBase64Source = asyncHandler(async (req: Request, res: Respons
         threadId,
         filename,
         contentBase64,
-        requestId,
+        contentType,
+        embeddingModel,
         callbackUrl,
     } = req.body;
 
-    res.status(202).json(
+    if (callbackUrl) {
+        const validation = validateCallbackUrl(callbackUrl);
+        if (!validation.valid) {
+            throw new ApiError(400, `Invalid callbackUrl: ${validation.reason}`);
+        }
+    }
+
+    // Fast sync pre-validation of upload metadata & base64 format before enqueueing
+    validateFileMetadata(filename, contentType);
+    validateAndDecodeBase64(contentBase64);
+
+    const { jobId, isDuplicate } = await enqueueRocketChatJob("ingestion", {
+        workspaceId,
+        rocketUserId,
+        roomId,
+        threadId,
+        filename,
+        contentBase64,
+        contentType,
+        embeddingModel,
+        callbackUrl,
+        requestId: canonicalRequestId,
+    });
+
+    if (isDuplicate) {
+        return res.status(202).json(
+            new ApiResponse(
+                202,
+                {
+                    status: "accepted",
+                    jobId,
+                    requestId: canonicalRequestId,
+                    duplicate: true,
+                },
+                "Duplicate source upload ignored",
+            ),
+        );
+    }
+
+    return res.status(202).json(
         new ApiResponse(
             202,
             {
                 status: "accepted",
-                jobId: `job-${requestId}`,
-                requestId,
+                jobId,
+                requestId: canonicalRequestId,
             },
             "Source queued for ingestion",
         ),
     );
-
-    setImmediate(async () => {
-        try {
-            const user = await getOrCreateRocketChatUser({
-                workspaceId,
-                rocketUserId,
-            });
-            const chat = await getOrCreateRocketChatChat({
-                userId: user.id,
-                roomId,
-                threadId,
-                workspaceId,
-            });
-
-            // Decode base64 content
-            const buffer = Buffer.from(contentBase64, "base64");
-            const textContent = buffer.toString("utf8");
-
-            const chunks = splitDocumentationContent(textContent, {
-                chunkSize: 1000,
-                chunkOverlap: 150,
-            });
-
-            const collectionName = `rc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-            const sourceUrl = `rocketchat://${workspaceId}/${roomId}/${filename}`;
-
-            // Create Qdrant collection for vector search
-            await qdrant.createCollection(collectionName, {
-                vectors: { size: 1536, distance: "Cosine" },
-            });
-
-            // Create or update ChatSource
-            const source = await prisma.chatSource.create({
-                data: {
-                    heading: filename,
-                    documentationUrl: sourceUrl,
-                    collectionName,
-                    totalPages: chunks.length,
-                    lastIndexedAt: new Date(),
-                    rocketchatWorkspaceId: workspaceId || "default",
-                    rocketchatRoomId: roomId,
-                    rocketchatThreadId: threadId || null,
-                    uploadedByRocketUserId: rocketUserId,
-                    chats: {
-                        connect: { id: chat.id },
-                    },
-                },
-            });
-
-            if (chunks.length > 0) {
-                const embeddings = (await generateVectorEmbeddings(
-                    chunks.map((c) => c.content),
-                )) as number[][];
-
-                await qdrant.upsert(collectionName, {
-                    wait: true,
-                    points: chunks.map((chunk, index) => ({
-                        id: crypto.randomUUID(),
-                        vector: embeddings[index],
-                        payload: {
-                            url: sourceUrl,
-                            title: filename,
-                            heading: chunk.heading || filename,
-                            body: chunk.content,
-                            chatSourceId: source.id,
-                            chunkType: chunk.chunkType,
-                            hasCodeBlock: chunk.hasCodeBlock,
-                        },
-                    })),
-                });
-
-                await prisma.documentPage.createMany({
-                    data: chunks.map((c) => ({
-                        heading: c.heading || filename,
-                        pageUrl: sourceUrl,
-                        chatSourceId: source.id,
-                    })),
-                });
-            }
-
-            await sendRocketChatCallback(callbackUrl, {
-                event: "indexing_complete",
-                request_id: requestId,
-                user_id: rocketUserId,
-                room_id: roomId,
-                thread_id: threadId || undefined,
-                document_name: filename,
-                chunks_count: chunks.length,
-            });
-        } catch (error: any) {
-            logger.error(
-                { err: error.message, requestId },
-                "Error processing base64 upload",
-            );
-            await sendRocketChatCallback(callbackUrl, {
-                event: "indexing_failed",
-                request_id: requestId,
-                user_id: rocketUserId,
-                room_id: roomId,
-                thread_id: threadId || undefined,
-                document_name: filename,
-                error: error.message || "Failed to index file",
-            });
-        }
-    });
 });
 
 /**
@@ -839,14 +735,18 @@ export const handleUtilityCompletion = asyncHandler(async (req: Request, res: Re
         concept = "",
         query = "",
         topK = 5,
+        model,
+        temperature,
     } = req.body;
 
     const openai = getLLMClient();
-    const model = process.env.DEFAULT_LLM_MODEL || "openai/gpt-4o-mini";
+    const activeModel = model || process.env.DEFAULT_LLM_MODEL || "openai/gpt-4o-mini";
+    const temp = typeof temperature === "number" ? temperature : 0.7;
 
     if (operation === "summarize") {
         const response = await openai.chat.completions.create({
-            model,
+            model: activeModel,
+            temperature: temp,
             messages: [
                 {
                     role: "system",
@@ -864,7 +764,7 @@ export const handleUtilityCompletion = asyncHandler(async (req: Request, res: Re
             .json(
                 new ApiResponse(
                     200,
-                    { result: summary, summary },
+                    { result: summary, summary, requestId: req.id },
                     "Text summarized successfully",
                 ),
             );
@@ -872,7 +772,8 @@ export const handleUtilityCompletion = asyncHandler(async (req: Request, res: Re
 
     if (operation === "explain") {
         const response = await openai.chat.completions.create({
-            model,
+            model: activeModel,
+            temperature: temp,
             messages: [
                 {
                     role: "system",
@@ -890,7 +791,7 @@ export const handleUtilityCompletion = asyncHandler(async (req: Request, res: Re
             .json(
                 new ApiResponse(
                     200,
-                    { result: explanation, explanation },
+                    { result: explanation, explanation, requestId: req.id },
                     "Concept explained successfully",
                 ),
             );
@@ -898,7 +799,8 @@ export const handleUtilityCompletion = asyncHandler(async (req: Request, res: Re
 
     if (operation === "translate") {
         const response = await openai.chat.completions.create({
-            model,
+            model: activeModel,
+            temperature: temp,
             messages: [
                 {
                     role: "system",
@@ -915,30 +817,52 @@ export const handleUtilityCompletion = asyncHandler(async (req: Request, res: Re
             .json(
                 new ApiResponse(
                     200,
-                    { result: translation, translation },
+                    { result: translation, translation, requestId: req.id },
                     "Text translated successfully",
                 ),
             );
     }
 
     if (operation === "search") {
+        const {
+            workspaceId = "default",
+            roomId,
+            threadId,
+            embeddingModel,
+        } = req.body;
+
         let results: any[] = [];
         try {
-            const searchResults = await prisma.documentPage.findMany({
-                where: {
-                    heading: { contains: query, mode: "insensitive" },
-                },
-                take: topK,
-                include: { chatSource: true },
+            results = await scopedVectorSearch({
+                query,
+                workspaceId,
+                roomId,
+                threadId,
+                limit: topK,
+                embeddingModel,
             });
-
-            results = searchResults.map((p) => ({
-                title: p.heading || p.chatSource?.heading || "Document",
-                snippet: `Found in ${p.chatSource?.heading || "knowledge base"} (${p.pageUrl})`,
-                relevance: 0.85,
-            }));
         } catch {
             results = [];
+        }
+
+        if (results.length === 0) {
+            try {
+                const searchResults = await prisma.documentPage.findMany({
+                    where: {
+                        heading: { contains: query, mode: "insensitive" },
+                    },
+                    take: topK,
+                    include: { chatSource: true },
+                });
+
+                results = searchResults.map((p) => ({
+                    title: p.heading || p.chatSource?.heading || "Document",
+                    snippet: `Found in ${p.chatSource?.heading || "knowledge base"} (${p.pageUrl})`,
+                    relevance: 0.85,
+                }));
+            } catch {
+                // Ignore fallback error
+            }
         }
 
         return res
@@ -946,7 +870,7 @@ export const handleUtilityCompletion = asyncHandler(async (req: Request, res: Re
             .json(
                 new ApiResponse(
                     200,
-                    { results },
+                    { results, requestId: req.id },
                     "Search completed successfully",
                 ),
             );

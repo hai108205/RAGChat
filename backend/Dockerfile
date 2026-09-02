@@ -18,6 +18,8 @@ COPY utils ./utils/
 COPY middlewares ./middlewares/
 COPY controllers ./controllers/
 COPY routers ./routers/
+COPY services ./services/
+COPY workers ./workers/
 COPY scripts ./scripts/
 COPY app.ts index.ts chatWorker.ts ./
 

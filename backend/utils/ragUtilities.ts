@@ -66,10 +66,31 @@ function getCrawlConfig(): CrawlConfig {
     };
 }
 
-async function generateVectorEmbeddings(input: string | string[]): Promise<number[] | number[][]> {
+export interface EmbeddingOptions {
+    model?: string;
+    dimensions?: number;
+}
+
+function getEmbeddingDimensionsForModel(model?: string): number {
+    if (model === "openai/text-embedding-3-large") {
+        return 3072;
+    }
+    return 1536;
+}
+
+async function generateVectorEmbeddings(
+    input: string | string[],
+    options?: EmbeddingOptions | string,
+): Promise<number[] | number[][]> {
+    const model = typeof options === "string" ? options : options?.model || "openai/text-embedding-3-small";
+    const dimensions =
+        typeof options === "object" && options?.dimensions
+            ? options.dimensions
+            : getEmbeddingDimensionsForModel(model);
+
     if (process.env.NODE_ENV === "test" && (!process.env.OPENROUTER_EMBEDDING_API_KEY || process.env.OPENROUTER_EMBEDDING_API_KEY.startsWith("test-"))) {
         const createDummyVector = (text: string): number[] => {
-            const vec = new Array(1536).fill(0.01);
+            const vec = new Array(dimensions).fill(0.01);
             let hash = 0;
             for (let i = 0; i < text.length; i++) {
                 hash = ((hash << 5) - hash) + text.charCodeAt(i);
@@ -87,10 +108,10 @@ async function generateVectorEmbeddings(input: string | string[]): Promise<numbe
     }
 
     const response = await getOpenAIClient().embeddings.create({
-        model: "openai/text-embedding-3-small",
+        model,
         input: input,
         encoding_format: "float",
-        dimensions: 1536,
+        dimensions,
     });
 
     if (Array.isArray(input)) {
@@ -633,6 +654,7 @@ export {
     scrapeWebpage,
     scrapeTitle,
     generateVectorEmbeddings,
+    getEmbeddingDimensionsForModel,
     getCrawlConfig,
     parseRobotsTxt,
     isUrlAllowedByRobots,

@@ -26,10 +26,13 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     const start = Date.now();
     res.on("finish", () => {
         const duration = Date.now() - start;
+        const routePath = req.baseUrl + (req.route?.path || req.path);
+        const queryKeys = Object.keys(req.query || {}).sort();
+        const queryParamNames = queryKeys.length > 0 ? `?${queryKeys.map((k) => `${k}=*`).join("&")}` : "";
         logger.info({
             reqId: req.id,
             method: req.method,
-            path: req.originalUrl,
+            path: `${routePath}${queryParamNames}`,
             status: res.statusCode,
             duration: `${duration}ms`,
         });

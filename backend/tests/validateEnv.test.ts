@@ -19,6 +19,8 @@ const requiredDockerEnv = {
     OPENROUTER_EMBEDDING_API_KEY: "openrouter-embedding-key",
     QDRANT_URL: "http://qdrant:6333",
     ROCKETCHAT_INTEGRATION_TOKEN: "integration-token",
+    ROCKETCHAT_CALLBACK_BASE_URL: "http://rocketchat:3000",
+    ROCKETCHAT_CALLBACK_ALLOWED_ORIGINS: "http://localhost:3001,http://rocketchat:3000",
 };
 
 describe("validateEnv", () => {
@@ -26,9 +28,6 @@ describe("validateEnv", () => {
         process.env = { ...requiredDockerEnv };
         vi.spyOn(console, "log").mockImplementation(() => undefined);
         vi.spyOn(console, "error").mockImplementation(() => undefined);
-        vi.spyOn(process, "exit").mockImplementation((code?: string | number | null) => {
-            throw new Error(`process.exit(${code})`);
-        });
     });
 
     afterEach(() => {
@@ -43,6 +42,45 @@ describe("validateEnv", () => {
         delete process.env.MEM0_TELEMETRY;
 
         expect(() => validateEnv()).not.toThrow();
-        expect(process.exit).not.toHaveBeenCalled();
+    });
+
+    it("throws if ROCKETCHAT_INTEGRATION_TOKEN is missing in production", () => {
+        process.env.NODE_ENV = "production";
+        delete process.env.ROCKETCHAT_INTEGRATION_TOKEN;
+
+        expect(() => validateEnv()).toThrow(/ROCKETCHAT_INTEGRATION_TOKEN/i);
+    });
+
+    it("throws if trusted callback config is missing in production", () => {
+        process.env.NODE_ENV = "production";
+        delete process.env.ROCKETCHAT_CALLBACK_BASE_URL;
+        delete process.env.ROCKETCHAT_CALLBACK_ALLOWED_ORIGINS;
+
+        expect(() => validateEnv()).toThrow(/ROCKETCHAT_CALLBACK_ALLOWED_ORIGINS or ROCKETCHAT_CALLBACK_BASE_URL/i);
+    });
+
+    it("allows missing token in dev mode only when ALLOW_UNAUTHENTICATED_ROCKETCHAT_DEV is true", () => {
+        process.env.NODE_ENV = "development";
+        delete process.env.ROCKETCHAT_INTEGRATION_TOKEN;
+        delete process.env.ROCKETCHAT_CALLBACK_BASE_URL;
+        delete process.env.ROCKETCHAT_CALLBACK_ALLOWED_ORIGINS;
+        process.env.ALLOW_UNAUTHENTICATED_ROCKETCHAT_DEV = "true";
+
+        expect(() => validateEnv()).not.toThrow();
+    });
+
+    it("throws in dev mode when token is missing and ALLOW_UNAUTHENTICATED_ROCKETCHAT_DEV is not set", () => {
+        process.env.NODE_ENV = "development";
+        delete process.env.ROCKETCHAT_INTEGRATION_TOKEN;
+        delete process.env.ALLOW_UNAUTHENTICATED_ROCKETCHAT_DEV;
+
+        expect(() => validateEnv()).toThrow(/ROCKETCHAT_INTEGRATION_TOKEN/i);
+    });
+
+    it("throws if a base required environment variable like DATABASE_URL is missing", () => {
+        delete process.env.DATABASE_URL;
+
+        expect(() => validateEnv()).toThrow(/DATABASE_URL/i);
     });
 });
+

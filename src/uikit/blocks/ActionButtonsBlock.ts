@@ -18,6 +18,8 @@ export enum ActionButtonActionId {
     INSPECT_CHUNKS = 'action:inspect_chunks',
 }
 
+export const BUTTON_ACTIONS = ActionButtonActionId;
+
 /**
  * Payload parameters encoded into button values.
  */

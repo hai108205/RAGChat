@@ -1,13 +1,15 @@
-import {
+import type {
     IHttp,
-    IHttpHeaders,
     IHttpRequest,
     IHttpResponse,
 } from '@rocket.chat/apps-engine/definition/accessors';
+import { RequestMethod } from '@rocket.chat/apps-engine/definition/accessors';
+
+export type IHttpHeaders = { [key: string]: string };
 
 export interface MockResponseRule {
     url: string | RegExp;
-    method?: string;
+    method?: string | RequestMethod;
     statusCode?: number;
     headers?: IHttpHeaders;
     content?: string;
@@ -54,16 +56,30 @@ export class MockHttp implements IHttp {
         return this.executeRequest('PATCH', url, options);
     }
 
+    private mapRequestMethod(method: string): RequestMethod {
+        switch (method.toUpperCase()) {
+            case 'GET': return RequestMethod.GET;
+            case 'POST': return RequestMethod.POST;
+            case 'PUT': return RequestMethod.PUT;
+            case 'DELETE': return RequestMethod.DELETE;
+            case 'PATCH': return RequestMethod.PATCH;
+            case 'HEAD': return RequestMethod.HEAD;
+            case 'OPTIONS': return RequestMethod.OPTIONS;
+            default: return RequestMethod.GET;
+        }
+    }
+
     private async executeRequest(
         method: string,
         url: string,
         options?: IHttpRequest,
     ): Promise<IHttpResponse> {
         this.requests.push({ method, url, options });
+        const requestMethod = this.mapRequestMethod(method);
 
         // Check registered mock rules first
         const matchedRule = this.mockRules.find((rule) => {
-            const methodMatches = !rule.method || rule.method.toUpperCase() === method.toUpperCase();
+            const methodMatches = !rule.method || String(rule.method).toUpperCase() === method.toUpperCase();
             if (typeof rule.url === 'string') {
                 const cleanRuleUrl = rule.url.replace(/\?.*$/, '');
                 const cleanReqUrl = url.replace(/\?.*$/, '');
@@ -86,11 +102,22 @@ export class MockHttp implements IHttp {
             const data = matchedRule.data;
             const content = matchedRule.content ?? (data !== undefined ? JSON.stringify(data) : '');
 
+            let parsedData = data;
+            if (parsedData === undefined && content) {
+                try {
+                    parsedData = JSON.parse(content);
+                } catch {
+                    parsedData = undefined;
+                }
+            }
+
             return {
+                url,
+                method: requestMethod,
                 statusCode,
                 headers,
                 content,
-                data: data ?? (content ? JSON.parse(content) : undefined),
+                data: parsedData,
             };
         }
 
@@ -138,6 +165,8 @@ export class MockHttp implements IHttp {
             });
 
             return {
+                url,
+                method: requestMethod,
                 statusCode: res.status,
                 headers: responseHeaders,
                 content,
@@ -145,6 +174,8 @@ export class MockHttp implements IHttp {
             };
         } catch (err: any) {
             return {
+                url,
+                method: requestMethod,
                 statusCode: 500,
                 headers: {},
                 content: JSON.stringify({ error: err.message }),

@@ -23,6 +23,7 @@ import {
 } from "../src/persistence/messagePayloadStore";
 import { Validator } from "../src/utils/Validator";
 import { Formatter, CitationSource } from "../src/utils/Formatter";
+import type { SourceDocument } from "../src/lib/BackendTypes";
 import { readMaxHistory, readBoolean } from "../src/utils/SettingReader";
 import { buildCallbackUrl } from "../src/utils/CallbackUrl";
 
@@ -71,9 +72,9 @@ describe("E2E Test Suite 5: UIKit Components, Persistence Layer, and Utilities",
 
         it("DocumentListBlock renders source list with status, chunks count, and delete buttons", () => {
             const builder = new BlockBuilder("ragchat");
-            const sources = [
-                { id: "src-1", filename: "financial_report.pdf", status: "READY", chunksCount: 42, createdAt: "2026-03-01T12:00:00Z" },
-                { id: "src-2", filename: "api_guide.docx", status: "PROCESSING", chunksCount: 0 },
+            const sources: SourceDocument[] = [
+                { id: "src-1", filename: "financial_report.pdf", status: "ACTIVE", chunksCount: 42, createdAt: "2026-03-01T12:00:00Z" },
+                { id: "src-2", filename: "api_guide.docx", status: "EMPTY", chunksCount: 0 },
             ];
 
             buildDocumentListBlocks(builder, sources, { roomId: "room-doc-1" });
@@ -281,7 +282,7 @@ describe("E2E Test Suite 5: UIKit Components, Persistence Layer, and Utilities",
         });
 
         it("CallbackUrl builds valid public webhook callback URLs", async () => {
-            const url = await buildCallbackUrl(harness.mockRead, "8a800b09-3cc1-4bc1-8dbf-12592fc223eb");
+            const url = await buildCallbackUrl(harness.mockRead);
             expect(url).toBe("http://rocketchat.internal:3000/api/apps/public/8a800b09-3cc1-4bc1-8dbf-12592fc223eb/callback");
         });
     });

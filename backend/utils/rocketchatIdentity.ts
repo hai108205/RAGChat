@@ -1,4 +1,20 @@
 import prisma from "./prismaClient.js";
+import {
+    buildRocketChatScopeKey,
+    buildRocketChatChatName,
+    buildChatSourceScopeWhere,
+    normalizeWorkspaceId,
+    normalizeRoomId,
+    normalizeThreadId,
+    parseRocketChatDocumentationUrl,
+} from "./rocketchatScope.js";
+
+export {
+    buildRocketChatScopeKey,
+    buildRocketChatChatName,
+    buildChatSourceScopeWhere,
+    parseRocketChatDocumentationUrl,
+};
 
 /**
  * Normalizes Rocket.Chat identity identifiers to a predictable internal username.
@@ -52,6 +68,7 @@ export interface GetOrCreateRocketChatChatInput {
 
 /**
  * Finds or creates an internal Chat record corresponding to a Rocket.Chat room and thread.
+ * Uses concurrency-safe upsert on rocketchatScopeKey.
  */
 export async function getOrCreateRocketChatChat({
     userId,
@@ -59,57 +76,91 @@ export async function getOrCreateRocketChatChat({
     threadId,
     workspaceId,
 }: GetOrCreateRocketChatChatInput) {
-    const chatName = `RC_${workspaceId || "default"}_Room_${roomId}${threadId ? `_Thread_${threadId}` : ""}`;
-
-    let chat = await prisma.chat.findFirst({
-        where: {
-            userId,
-            name: chatName,
-            deletedAt: null,
-        },
-        include: {
-            chatSources: {
-                orderBy: { createdAt: "asc" },
-            },
-        },
+    const ws = normalizeWorkspaceId(workspaceId);
+    const rm = normalizeRoomId(roomId);
+    const th = normalizeThreadId(threadId);
+    const scopeKey = buildRocketChatScopeKey({
+        userId,
+        workspaceId: ws,
+        roomId: rm,
+        threadId: th,
+    });
+    const chatName = buildRocketChatChatName({
+        workspaceId: ws,
+        roomId: rm,
+        threadId: th,
     });
 
-    if (!chat) {
-        chat = await prisma.chat.create({
-            data: {
+    let chat: any;
+    if (typeof (prisma.chat as any)?.upsert === "function") {
+        chat = await prisma.chat.upsert({
+            where: {
+                rocketchatScopeKey: scopeKey,
+            },
+            create: {
                 userId,
                 name: chatName,
                 status: "READY",
+                rocketchatScopeKey: scopeKey,
+                rocketchatWorkspaceId: ws,
+                rocketchatRoomId: rm,
+                rocketchatThreadId: th,
+            },
+            update: {
+                deletedAt: null,
+                rocketchatWorkspaceId: ws,
+                rocketchatRoomId: rm,
+                rocketchatThreadId: th,
             },
             include: {
-                chatSources: true,
+                chatSources: {
+                    orderBy: { createdAt: "asc" },
+                },
             },
         });
+    } else {
+        chat = await prisma.chat.findFirst({
+            where: {
+                userId,
+                name: chatName,
+            },
+            include: {
+                chatSources: {
+                    orderBy: { createdAt: "asc" },
+                },
+            },
+        });
+        if (!chat) {
+            chat = await prisma.chat.create({
+                data: {
+                    userId,
+                    name: chatName,
+                    status: "READY",
+                    rocketchatScopeKey: scopeKey,
+                    rocketchatWorkspaceId: ws,
+                    rocketchatRoomId: rm,
+                    rocketchatThreadId: th,
+                },
+                include: {
+                    chatSources: true,
+                },
+            });
+        }
     }
 
+    const scopeWhere = buildChatSourceScopeWhere({
+        workspaceId: ws,
+        roomId: rm,
+        threadId: th,
+        mode: "room",
+    });
+
     const roomSources = (await prisma.chatSource.findMany({
-        where: {
-            OR: [
-                {
-                    rocketchatWorkspaceId: workspaceId || "default",
-                    rocketchatRoomId: roomId,
-                    OR: [
-                        { rocketchatThreadId: threadId || null },
-                        { rocketchatThreadId: null },
-                    ],
-                },
-                {
-                    rocketchatRoomId: null,
-                    documentationUrl: {
-                        startsWith: `rocketchat://${workspaceId || "default"}/${roomId}/`,
-                    },
-                },
-            ],
-        },
+        where: scopeWhere,
         select: { id: true },
     })) || [];
 
-    if (roomSources && roomSources.length) {
+    if (roomSources && roomSources.length > 0) {
         const existingSourceIds = new Set((chat.chatSources || []).map((s: any) => s.id));
         const toConnect = roomSources.filter((s) => !existingSourceIds.has(s.id));
 
@@ -133,27 +184,6 @@ export async function getOrCreateRocketChatChat({
     return chat;
 }
 
-/**
- * Parses a rocketchat:// URI into its constituent parts.
- */
-export function parseRocketChatDocumentationUrl(url?: string | null): {
-    workspaceId: string;
-    roomId: string;
-    filename: string;
-} | null {
-    if (!url || !url.startsWith("rocketchat://")) return null;
-    const parts = url.replace(/^rocketchat:\/\//, "").split("/");
-    if (parts.length >= 3) {
-        const [ws, room, ...rest] = parts;
-        return {
-            workspaceId: ws,
-            roomId: room,
-            filename: rest.join("/"),
-        };
-    }
-    return null;
-}
-
 export interface CitationSource {
     title: string;
     snippet: string;
@@ -162,21 +192,25 @@ export interface CitationSource {
 }
 
 /**
- * Normalizes backend RAG citation points to Rocket.Chat app CitationSource format.
+ * Normalizes backend RAG citation points or ScopedSearchResults to Rocket.Chat app CitationSource format.
  */
 export function formatRocketChatCitations(sources?: any[] | null): CitationSource[] {
     if (!Array.isArray(sources)) return [];
 
     return sources.map((source) => {
         const payload = source.payload || source;
-        const score = typeof source.score === "number" ? source.score : 0;
+        const rawScore = typeof source.relevance === "number"
+            ? source.relevance
+            : typeof source.score === "number"
+                ? source.score
+                : 0;
         // Normalize relevance: if score > 1, assume 0-100 scale and divide by 100
-        const relevance = score > 1 ? score / 100 : score;
+        const relevance = rawScore > 1 ? rawScore / 100 : rawScore;
 
         return {
             title: payload.title || payload.heading || "Source Document",
-            snippet: payload.body || payload.chunkText || payload.content || "",
-            pageUrl: payload.url || payload.pageUrl || "",
+            snippet: payload.snippet || payload.body || payload.chunkText || payload.content || "",
+            pageUrl: payload.pageUrl || payload.url || "",
             relevance: Math.round(relevance * 100) / 100,
         };
     });

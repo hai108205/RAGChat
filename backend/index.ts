@@ -5,6 +5,9 @@ import validateEnv from "./utils/validateEnv.js";
 import prisma from "./utils/prismaClient.js";
 import redis from "./utils/redis.js";
 import { closeChatCreationQueue } from "./utils/queue.js";
+import { closeQdrantCleanupQueue } from "./utils/rocketchatQueue.js";
+import { stopQdrantCleanupWorker, startQdrantCleanupWorker } from "./workers/qdrantCleanupWorker.js";
+import { startRocketChatWorker, closeRocketChatWorker } from "./workers/rocketchatIntegrationWorker.js";
 import type { Server } from "node:http";
 
 validateEnv();
@@ -17,6 +20,8 @@ connectDB()
         server = app.listen(PORT, () => {
             console.log(`Server is running at port : ${PORT}`);
         });
+        startQdrantCleanupWorker();
+        startRocketChatWorker();
     })
     .catch((err) => {
         console.log("Postgres connection failed :", err);
@@ -47,6 +52,13 @@ async function handleGracefulShutdown(signal: string) {
 
         await closeChatCreationQueue();
         console.log("BullMQ queue connection closed.");
+
+        await stopQdrantCleanupWorker();
+        await closeQdrantCleanupQueue();
+        console.log("Qdrant cleanup worker and queue closed.");
+
+        await closeRocketChatWorker();
+        console.log("Rocket.Chat integration worker closed.");
 
         await redis.quit().catch(() => {});
         console.log("Redis connection closed.");

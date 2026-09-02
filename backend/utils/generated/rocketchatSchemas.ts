@@ -58,7 +58,9 @@ export const rocketchatSourcesQuerySchema = {
         workspaceId: z.string().optional(),
         roomId: z.string().optional(),
         threadId: z.string().optional(),
+        mode: z.enum(["room", "global"]).default("room"),
         limit: z.coerce.number().int().min(1).max(100).default(50),
+        cursor: z.string().optional(),
     }),
 };
 
@@ -116,6 +118,9 @@ export const rocketchatUtilityCompletionSchema = {
         topK: z.coerce.number().int().min(1).max(50).default(5),
         workspaceId: z.string().optional(),
         roomId: z.string().optional(),
+        threadId: z.string().optional().nullable(),
+        embeddingModel: z.string().regex(/^[a-zA-Z0-9_./-]+$/, "Invalid embedding model identifier").optional(),
+        model: z.string().regex(/^[a-zA-Z0-9_./-]+$/, "Invalid model identifier").optional(),
         temperature: temperatureSchema,
     }),
 };

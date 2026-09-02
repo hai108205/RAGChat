@@ -1,6 +1,6 @@
-import { IPersistence } from '@rocket.chat/apps-engine/definition/accessors';
-import { RocketChatAssociationRecord } from '@rocket.chat/apps-engine/definition/metadata';
-import { MockRead } from './MockRead';
+import type { IPersistence } from '@rocket.chat/apps-engine/definition/accessors';
+import type { RocketChatAssociationRecord } from '@rocket.chat/apps-engine/definition/metadata';
+import type { MockRead } from './MockRead';
 
 export class MockPersistence implements IPersistence {
     constructor(private mockRead: MockRead) {}
@@ -31,18 +31,18 @@ export class MockPersistence implements IPersistence {
         return firstKey;
     }
 
-    public async update(id: string, data: object, upsert?: boolean): Promise<string> {
+    public async update(id: string, data: object, _upsert?: boolean): Promise<string> {
         this.mockRead.persistenceStore.set(id, [data]);
         return id;
     }
 
-    public async updateByAssociation(association: RocketChatAssociationRecord, data: object, upsert?: boolean): Promise<string> {
+    public async updateByAssociation(association: RocketChatAssociationRecord, data: object, _upsert?: boolean): Promise<string> {
         const key = `${association.getModel()}_${association.getID()}`;
         this.mockRead.persistenceStore.set(key, [data]);
         return key;
     }
 
-    public async updateByAssociations(associations: RocketChatAssociationRecord[], data: object, upsert?: boolean): Promise<string> {
+    public async updateByAssociations(associations: RocketChatAssociationRecord[], data: object, _upsert?: boolean): Promise<string> {
         let firstKey = '';
         for (const assoc of associations) {
             const key = `${assoc.getModel()}_${assoc.getID()}`;
@@ -52,21 +52,21 @@ export class MockPersistence implements IPersistence {
         return firstKey;
     }
 
-    public async remove(id: string): Promise<object | undefined> {
+    public async remove(id: string): Promise<object> {
         const existing = this.mockRead.persistenceStore.get(id);
         this.mockRead.persistenceStore.delete(id);
-        return existing?.[0];
+        return existing?.[0] || {};
     }
 
-    public async removeByAssociation(association: RocketChatAssociationRecord): Promise<object[]> {
+    public async removeByAssociation(association: RocketChatAssociationRecord): Promise<Array<object>> {
         const key = `${association.getModel()}_${association.getID()}`;
         const existing = this.mockRead.persistenceStore.get(key) || [];
         this.mockRead.persistenceStore.delete(key);
         return existing;
     }
 
-    public async removeByAssociations(associations: RocketChatAssociationRecord[]): Promise<object[]> {
-        const removed: object[] = [];
+    public async removeByAssociations(associations: RocketChatAssociationRecord[]): Promise<Array<object>> {
+        const removed: Array<object> = [];
         for (const assoc of associations) {
             const key = `${assoc.getModel()}_${assoc.getID()}`;
             const existing = this.mockRead.persistenceStore.get(key) || [];
