@@ -36,11 +36,12 @@ export class Validator {
     }
 
     /**
-     * Trims and bounds user input to a safe character limit.
+     * Sanitizes user input string by trimming and enforcing max length.
      */
-    public static sanitizeInput(input: string): string {
+    public static sanitizeInput(input: string | any): string {
+        if (typeof input !== 'string') {
+            return typeof input === 'number' || typeof input === 'boolean' ? String(input) : '';
+        }
         return input.trim().slice(0, 4000);
     }
 }
-
-
