@@ -1,5 +1,5 @@
 import { ChatMessage } from '../persistence/sessionStore';
-import { CitationSource } from '../utils/Formatter';
+import { ERRORS } from '../constants/Errors';
 
 export interface BackendResponseEnvelope<T = unknown> {
     statusCode?: number;
@@ -10,6 +10,72 @@ export interface BackendResponseEnvelope<T = unknown> {
     errors?: string[] | Array<{ field: string; message: string }>;
     error?: string;
     detail?: string;
+    errorCode?: string;
+    error_code?: string;
+    requestId?: string;
+    request_id?: string;
+    retryable?: boolean;
+}
+
+/**
+ * Structured, typed error for SDK HTTP interactions with the backend.
+ * Provides machine-readable error codes/status and safe user-facing messaging.
+ */
+export class BackendClientError extends Error {
+    public readonly statusCode: number;
+    public readonly errorCode?: string;
+    public readonly requestId?: string;
+    public readonly errors?: Array<string | { field: string; message: string }>;
+    public readonly userMessage: string;
+    public readonly retryable: boolean;
+
+    constructor(options: {
+        statusCode: number;
+        message: string;
+        userMessage?: string;
+        errorCode?: string;
+        requestId?: string;
+        errors?: Array<string | { field: string; message: string }>;
+        retryable?: boolean;
+    }) {
+        super(options.message);
+        this.name = 'BackendClientError';
+        this.statusCode = options.statusCode;
+        this.errorCode = options.errorCode;
+        this.requestId = options.requestId;
+        this.errors = options.errors;
+        this.retryable = options.retryable ?? (options.statusCode === 429 || options.statusCode === 408 || options.statusCode >= 500);
+        this.userMessage = options.userMessage || BackendClientError.getUserFacingMessage(options.statusCode, options.errorCode);
+
+        Object.setPrototypeOf(this, BackendClientError.prototype);
+    }
+
+    public static getUserFacingMessage(statusCode: number, errorCode?: string): string {
+        if (statusCode === 401 || statusCode === 403 || errorCode === 'UNAUTHORIZED' || errorCode === 'FORBIDDEN') {
+            return ERRORS.AUTH_ERROR;
+        }
+        if (statusCode === 429 || errorCode === 'RATE_LIMIT_EXCEEDED') {
+            return ERRORS.RATE_LIMIT;
+        }
+        if (statusCode === 504 || errorCode === 'GATEWAY_TIMEOUT') {
+            return ERRORS.GATEWAY_TIMEOUT;
+        }
+        if (statusCode === 408 || errorCode === 'TIMEOUT') {
+            return ERRORS.TIMEOUT;
+        }
+        if (statusCode >= 500) {
+            return ERRORS.SERVER_ERROR;
+        }
+        return ERRORS.BACKEND_ERROR(statusCode);
+    }
+}
+
+export interface BackendAskOptions {
+    model?: string;
+    temperature?: number;
+    embeddingModel?: string;
+    workspaceId?: string;
+    provider?: string;
 }
 
 export interface AsyncMessagePayload {
@@ -22,6 +88,8 @@ export interface AsyncMessagePayload {
     query: string;
     history?: ChatMessage[];
     model?: string;
+    temperature?: number;
+    embeddingModel?: string;
     provider?: string;
     callbackUrl?: string;
 }
@@ -60,7 +128,9 @@ export interface Base64UploadPayload {
     filename: string;
     contentBase64: string;
     contentType?: string;
+    mimeType?: string;
     requestId: string;
+    embeddingModel?: string;
     callbackUrl?: string;
 }
 
@@ -80,6 +150,8 @@ export interface UtilityCompletionPayload {
     topK?: number;
     workspaceId?: string;
     roomId?: string;
+    model?: string;
+    temperature?: number;
 }
 
 export interface SearchResult {

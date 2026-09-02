@@ -64,7 +64,7 @@ app.use(
     }),
 );
 
-const jsonLimit = process.env.JSON_BODY_LIMIT || "10mb";
+const jsonLimit = process.env.JSON_BODY_LIMIT || "20mb";
 app.use(express.json({ limit: jsonLimit }));
 app.use(express.urlencoded({ extended: true, limit: jsonLimit }));
 app.use(express.static("public"));
@@ -97,9 +97,14 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     const statusCode = err.statusCode || 500;
     res.status(statusCode).json({
         statusCode,
+        success: false,
+        data: null,
         message: err.message,
         errors: err.errors || [],
+        requestId: req.id,
     });
 });
+
+
 
 export { app };

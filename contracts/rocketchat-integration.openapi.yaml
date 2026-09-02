@@ -1,0 +1,1191 @@
+openapi: 3.1.0
+info:
+  title: Rocket.Chat Integration API
+  version: 1.0.0
+  description: Canonical OpenAPI contract specification for Rocket.Chat App integration with RAGChat backend.
+servers:
+  - url: /api/v1/integrations/rocketchat
+    description: Relative integration path
+paths:
+  /messages/async:
+    post:
+      summary: Enqueue asynchronous question answering message
+      operationId: postRocketchatAsyncMessage
+      tags:
+        - Integration
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/XRequestIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AsyncMessageRequest"
+      responses:
+        "202":
+          description: Message accepted and queued for asynchronous processing
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsyncMessageResponse"
+        "400":
+          $ref: "#/components/responses/400BadRequest"
+        "401":
+          $ref: "#/components/responses/401Unauthorized"
+        "500":
+          $ref: "#/components/responses/500InternalError"
+
+  /stats:
+    get:
+      summary: Retrieve integration statistics and document lists
+      operationId: getRocketchatStats
+      tags:
+        - Integration
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/XRequestIdHeader"
+        - name: workspaceId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Rocket.Chat workspace ID
+        - name: roomId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Rocket.Chat room ID
+        - name: threadId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional thread ID
+      responses:
+        "200":
+          description: Integration statistics retrieved successfully
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsResponse"
+        "400":
+          $ref: "#/components/responses/400BadRequest"
+        "401":
+          $ref: "#/components/responses/401Unauthorized"
+        "500":
+          $ref: "#/components/responses/500InternalError"
+
+  /sources:
+    get:
+      summary: List indexed knowledge base sources
+      operationId: listRocketchatSources
+      tags:
+        - Integration
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/XRequestIdHeader"
+        - name: workspaceId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: roomId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: threadId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional pagination cursor (source UUID)
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - room
+              - global
+            default: room
+          description: Scope mode (defaults to room)
+      responses:
+        "200":
+          description: Sources retrieved successfully
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourcesListResponse"
+        "400":
+          $ref: "#/components/responses/400BadRequest"
+        "401":
+          $ref: "#/components/responses/401Unauthorized"
+        "500":
+          $ref: "#/components/responses/500InternalError"
+
+  /sources/{id}:
+    delete:
+      summary: Delete an indexed knowledge source
+      operationId: deleteRocketchatSource
+      tags:
+        - Integration
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/XRequestIdHeader"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: UUID of the source to delete
+        - name: workspaceId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: roomId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - room
+              - global
+            default: room
+      responses:
+        "200":
+          description: Source deleted successfully
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteSourceResponse"
+        "400":
+          $ref: "#/components/responses/400BadRequest"
+        "401":
+          $ref: "#/components/responses/401Unauthorized"
+        "403":
+          $ref: "#/components/responses/403Forbidden"
+        "404":
+          $ref: "#/components/responses/404NotFound"
+        "500":
+          $ref: "#/components/responses/500InternalError"
+
+  /feedback:
+    post:
+      summary: Submit user feedback on AI response
+      operationId: postRocketchatFeedback
+      tags:
+        - Integration
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/XRequestIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FeedbackRequest"
+      responses:
+        "200":
+          description: Feedback recorded successfully
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FeedbackResponse"
+        "400":
+          $ref: "#/components/responses/400BadRequest"
+        "401":
+          $ref: "#/components/responses/401Unauthorized"
+        "500":
+          $ref: "#/components/responses/500InternalError"
+
+  /sources/base64:
+    post:
+      summary: Upload and index base64-encoded document
+      operationId: postRocketchatBase64Source
+      tags:
+        - Integration
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/XRequestIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Base64UploadRequest"
+      responses:
+        "202":
+          description: Document accepted for ingestion
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Base64UploadResponse"
+        "400":
+          $ref: "#/components/responses/400BadRequest"
+        "401":
+          $ref: "#/components/responses/401Unauthorized"
+        "500":
+          $ref: "#/components/responses/500InternalError"
+
+  /utilities/completion:
+    post:
+      summary: Execute utility LLM completion (summarize, explain, translate, search)
+      operationId: postRocketchatUtilityCompletion
+      tags:
+        - Integration
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/XRequestIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UtilityCompletionRequest"
+      responses:
+        "200":
+          description: Utility operation executed successfully
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UtilityCompletionResponse"
+        "400":
+          $ref: "#/components/responses/400BadRequest"
+        "401":
+          $ref: "#/components/responses/401Unauthorized"
+        "500":
+          $ref: "#/components/responses/500InternalError"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Shared secret Bearer token configured via ROCKETCHAT_INTEGRATION_TOKEN
+
+  parameters:
+    XRequestIdHeader:
+      name: X-Request-Id
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Request correlation identifier
+
+  headers:
+    X-Request-Id:
+      description: Response correlation identifier echoing incoming request ID or server-generated UUID
+      schema:
+        type: string
+
+  responses:
+    400BadRequest:
+      description: Bad Request / Validation Failure
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    401Unauthorized:
+      description: Unauthorized / Missing or Invalid Token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    403Forbidden:
+      description: Forbidden / Cross-room or Scope Violation
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    404NotFound:
+      description: Resource Not Found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    409Conflict:
+      description: Conflict / Duplicate Resource
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    422Unprocessable:
+      description: Unprocessable Entity / Semantic Error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    500InternalError:
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    504GatewayTimeout:
+      description: Gateway / LLM Provider Timeout
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required:
+        - statusCode
+        - success
+        - data
+        - message
+        - errors
+      properties:
+        statusCode:
+          type: integer
+          example: 400
+        success:
+          type: boolean
+          example: false
+        data:
+          type: "null"
+          nullable: true
+          example: null
+        message:
+          type: string
+          example: "Validation failed"
+        errors:
+          type: array
+          items:
+            anyOf:
+              - type: string
+              - type: object
+                required:
+                  - field
+                  - message
+                properties:
+                  field:
+                    type: string
+                  message:
+                    type: string
+          example: []
+
+    ChatMessageHistory:
+      type: object
+      required:
+        - role
+        - content
+      properties:
+        role:
+          type: string
+          example: "user"
+        content:
+          type: string
+          example: "Hello"
+
+    AsyncMessageRequest:
+      type: object
+      required:
+        - rocketUserId
+        - roomId
+        - requestId
+        - query
+      properties:
+        workspaceId:
+          type: string
+          default: "default"
+          example: "default"
+        rocketUserId:
+          type: string
+          example: "user-123"
+        roomId:
+          type: string
+          example: "GENERAL"
+        threadId:
+          type: string
+          nullable: true
+          example: "t-456"
+        placeholderId:
+          type: string
+          nullable: true
+          example: "msg-placeholder-123"
+        requestId:
+          type: string
+          example: "ask-1788192000-abc123"
+        query:
+          type: string
+          example: "How do I configure OAuth in Rocket.Chat?"
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessageHistory"
+        model:
+          type: string
+          example: "openai/gpt-4o-mini"
+        temperature:
+          type: number
+          minimum: 0.0
+          maximum: 2.0
+          default: 0.7
+          example: 0.7
+        embeddingModel:
+          type: string
+          example: "openai/text-embedding-3-small"
+        provider:
+          type: string
+          example: "DEFAULT"
+        callbackUrl:
+          type: string
+          nullable: true
+          example: "http://rocketchat:3000/api/apps/public/8a800b09-3cc1-4bc1-8dbf-12592fc223eb/callback"
+
+    AsyncMessageResponseData:
+      type: object
+      required:
+        - status
+        - requestId
+      properties:
+        status:
+          type: string
+          example: "accepted"
+        jobId:
+          type: string
+          example: "job-ask-1788192000-abc123"
+        requestId:
+          type: string
+          example: "ask-1788192000-abc123"
+        duplicate:
+          type: boolean
+          example: false
+
+    AsyncMessageResponse:
+      type: object
+      required:
+        - statusCode
+        - success
+        - data
+        - message
+      properties:
+        statusCode:
+          type: integer
+          example: 202
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: "#/components/schemas/AsyncMessageResponseData"
+        message:
+          type: string
+          example: "Message queued for processing"
+
+    StatsDocument:
+      type: object
+      required:
+        - id
+        - filename
+        - chunks_count
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "c0a80123-0000-4000-8000-000000000001"
+        filename:
+          type: string
+          example: "Rocket.Chat Admin Guide"
+        chunks_count:
+          type: integer
+          example: 42
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-08-31T00:00:00.000Z"
+
+    StatsUsage:
+      type: object
+      required:
+        - inputTokens
+        - outputTokens
+        - totalTokens
+      properties:
+        inputTokens:
+          type: integer
+          example: 1520
+        outputTokens:
+          type: integer
+          example: 840
+        totalTokens:
+          type: integer
+          example: 2360
+
+    StatsResponseData:
+      type: object
+      required:
+        - documents
+      properties:
+        documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/StatsDocument"
+        chats:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        usage:
+          $ref: "#/components/schemas/StatsUsage"
+
+    StatsResponse:
+      type: object
+      required:
+        - statusCode
+        - success
+        - data
+        - message
+      properties:
+        statusCode:
+          type: integer
+          example: 200
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: "#/components/schemas/StatsResponseData"
+        message:
+          type: string
+          example: "Integration stats retrieved successfully"
+
+    SourceDocument:
+      type: object
+      required:
+        - id
+        - filename
+        - chunksCount
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "c0a80123-0000-4000-8000-000000000001"
+        filename:
+          type: string
+          example: "guidelines.md"
+        documentationUrl:
+          type: string
+          nullable: true
+          example: "rocketchat://default/GENERAL/guidelines.md"
+        chunksCount:
+          type: integer
+          example: 8
+        totalPages:
+          type: integer
+          nullable: true
+          example: 1
+        createdAt:
+          type: string
+          format: date-time
+        lastIndexedAt:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          enum:
+            - ACTIVE
+            - EMPTY
+            - FAILED
+          example: "ACTIVE"
+        embeddingModel:
+          type: string
+          nullable: true
+          example: "openai/text-embedding-3-small"
+        embeddingDimensions:
+          type: integer
+          nullable: true
+          example: 1536
+
+    SourcesListResponseData:
+      type: object
+      required:
+        - sources
+      properties:
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceDocument"
+
+    SourcesListResponse:
+      type: object
+      required:
+        - statusCode
+        - success
+        - data
+        - message
+      properties:
+        statusCode:
+          type: integer
+          example: 200
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: "#/components/schemas/SourcesListResponseData"
+        message:
+          type: string
+          example: "Sources retrieved successfully"
+
+    DeleteSourceResponseData:
+      type: object
+      required:
+        - id
+        - deleted
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "c0a80123-0000-4000-8000-000000000001"
+        deleted:
+          type: boolean
+          example: true
+        vectorsRemoved:
+          type: boolean
+          example: true
+        qdrant:
+          type: object
+          properties:
+            deleted:
+              type: boolean
+              example: true
+
+    DeleteSourceResponse:
+      type: object
+      required:
+        - statusCode
+        - success
+        - data
+        - message
+      properties:
+        statusCode:
+          type: integer
+          example: 200
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: "#/components/schemas/DeleteSourceResponseData"
+        message:
+          type: string
+          example: "Source deleted successfully"
+
+    FeedbackRequest:
+      type: object
+      required:
+        - rocketUserId
+        - rating
+      properties:
+        messageId:
+          type: string
+          nullable: true
+          example: "msg-123"
+        chatMessageId:
+          type: string
+          format: uuid
+          nullable: true
+          example: "a0000000-0000-4000-8000-000000000002"
+        rating:
+          type: string
+          enum:
+            - positive
+            - negative
+          example: "positive"
+        feedbackText:
+          type: string
+          maxLength: 2000
+          nullable: true
+          example: "Great response!"
+        rocketUserId:
+          type: string
+          example: "rocket-user-id"
+        workspaceId:
+          type: string
+          nullable: true
+          example: "default"
+        roomId:
+          type: string
+          nullable: true
+          example: "GENERAL"
+
+    FeedbackResponseData:
+      type: object
+      required:
+        - recorded
+        - rating
+      properties:
+        recorded:
+          type: boolean
+          example: true
+        rating:
+          type: string
+          enum:
+            - positive
+            - negative
+          example: "positive"
+        chatMessageId:
+          type: string
+          format: uuid
+          nullable: true
+
+    FeedbackResponse:
+      type: object
+      required:
+        - statusCode
+        - success
+        - data
+        - message
+      properties:
+        statusCode:
+          type: integer
+          example: 200
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: "#/components/schemas/FeedbackResponseData"
+        message:
+          type: string
+          example: "Feedback submitted successfully"
+
+    Base64UploadRequest:
+      type: object
+      required:
+        - rocketUserId
+        - roomId
+        - filename
+        - contentBase64
+        - requestId
+      properties:
+        workspaceId:
+          type: string
+          default: "default"
+          example: "default"
+        rocketUserId:
+          type: string
+          example: "rocket-user-id"
+        roomId:
+          type: string
+          example: "GENERAL"
+        threadId:
+          type: string
+          nullable: true
+          example: "t-456"
+        filename:
+          type: string
+          example: "guidelines.md"
+        contentBase64:
+          type: string
+          description: Raw document content in standard base64 encoding
+          example: "IyBHdWlkZWxpbmVz..."
+        contentType:
+          type: string
+          nullable: true
+          example: "text/markdown"
+        embeddingModel:
+          type: string
+          nullable: true
+          example: "openai/text-embedding-3-small"
+        requestId:
+          type: string
+          example: "upload-1788192000-xyz"
+        callbackUrl:
+          type: string
+          nullable: true
+          example: "http://rocketchat:3000/api/apps/public/8a800b09-3cc1-4bc1-8dbf-12592fc223eb/callback"
+
+    Base64UploadResponseData:
+      type: object
+      required:
+        - status
+        - requestId
+      properties:
+        status:
+          type: string
+          example: "accepted"
+        jobId:
+          type: string
+          example: "job-upload-1788192000-xyz"
+        requestId:
+          type: string
+          example: "upload-1788192000-xyz"
+
+    Base64UploadResponse:
+      type: object
+      required:
+        - statusCode
+        - success
+        - data
+        - message
+      properties:
+        statusCode:
+          type: integer
+          example: 202
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: "#/components/schemas/Base64UploadResponseData"
+        message:
+          type: string
+          example: "Source queued for ingestion"
+
+    UtilityCompletionRequest:
+      type: object
+      required:
+        - operation
+      properties:
+        operation:
+          type: string
+          enum:
+            - summarize
+            - explain
+            - translate
+            - search
+          example: "summarize"
+        text:
+          type: string
+          nullable: true
+          example: "Long text to summarize..."
+        targetLang:
+          type: string
+          nullable: true
+          example: "vi"
+        concept:
+          type: string
+          nullable: true
+          example: "Microservices"
+        query:
+          type: string
+          nullable: true
+          example: "search keyword"
+        topK:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 5
+          example: 5
+        workspaceId:
+          type: string
+          nullable: true
+          example: "default"
+        roomId:
+          type: string
+          nullable: true
+          example: "GENERAL"
+        model:
+          type: string
+          nullable: true
+          example: "openai/gpt-4o-mini"
+        temperature:
+          type: number
+          minimum: 0.0
+          maximum: 2.0
+          default: 0.7
+          example: 0.7
+
+    SearchResultItem:
+      type: object
+      required:
+        - title
+        - snippet
+        - relevance
+      properties:
+        title:
+          type: string
+          example: "OAuth Setup Guide"
+        snippet:
+          type: string
+          example: "Matching snippet content..."
+        relevance:
+          type: number
+          example: 0.85
+        metadata:
+          type: object
+          additionalProperties: true
+
+    UtilityCompletionResponseData:
+      type: object
+      properties:
+        result:
+          type: string
+          nullable: true
+        summary:
+          type: string
+          nullable: true
+        explanation:
+          type: string
+          nullable: true
+        translation:
+          type: string
+          nullable: true
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchResultItem"
+
+    UtilityCompletionResponse:
+      type: object
+      required:
+        - statusCode
+        - success
+        - data
+        - message
+      properties:
+        statusCode:
+          type: integer
+          example: 200
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: "#/components/schemas/UtilityCompletionResponseData"
+        message:
+          type: string
+          example: "Operation completed successfully"
+
+    # Callback Webhook Events
+    CitationSource:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          example: "OAuth Setup Guide"
+        snippet:
+          type: string
+          nullable: true
+          example: "OAuth configuration allows authentication via Google..."
+        pageUrl:
+          type: string
+          nullable: true
+          example: "https://docs.rocket.chat/setup/oauth"
+        relevance:
+          type: number
+          nullable: true
+          example: 0.92
+
+    ChatCompletedCallbackEvent:
+      type: object
+      required:
+        - event
+        - request_id
+        - user_id
+        - room_id
+        - query
+        - answer
+      properties:
+        event:
+          type: string
+          enum:
+            - chat_completed
+          example: "chat_completed"
+        request_id:
+          type: string
+          example: "ask-1788192000-abc123"
+        user_id:
+          type: string
+          example: "user-123"
+        room_id:
+          type: string
+          example: "GENERAL"
+        thread_id:
+          type: string
+          nullable: true
+          example: "t-456"
+        placeholder_id:
+          type: string
+          nullable: true
+          example: "msg-placeholder-123"
+        query:
+          type: string
+          example: "How do I configure OAuth in Rocket.Chat?"
+        answer:
+          type: string
+          example: "To configure OAuth, navigate to Administration > Settings > OAuth..."
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/CitationSource"
+        model:
+          type: string
+          nullable: true
+          example: "gpt-4o"
+
+    ChatFailedCallbackEvent:
+      type: object
+      required:
+        - event
+        - request_id
+        - user_id
+        - room_id
+        - error
+      properties:
+        event:
+          type: string
+          enum:
+            - chat_failed
+          example: "chat_failed"
+        request_id:
+          type: string
+          example: "ask-1788192000-abc123"
+        user_id:
+          type: string
+          example: "user-123"
+        room_id:
+          type: string
+          example: "GENERAL"
+        thread_id:
+          type: string
+          nullable: true
+          example: "t-456"
+        placeholder_id:
+          type: string
+          nullable: true
+          example: "msg-placeholder-123"
+        query:
+          type: string
+          nullable: true
+          example: "user query"
+        error:
+          type: string
+          example: "Failed to retrieve documents or LLM provider timed out"
+
+    IndexingCompleteCallbackEvent:
+      type: object
+      required:
+        - event
+        - request_id
+        - user_id
+        - room_id
+        - document_name
+      properties:
+        event:
+          type: string
+          enum:
+            - indexing_complete
+          example: "indexing_complete"
+        request_id:
+          type: string
+          example: "upload-1788192000-xyz"
+        user_id:
+          type: string
+          example: "user-123"
+        room_id:
+          type: string
+          example: "GENERAL"
+        thread_id:
+          type: string
+          nullable: true
+          example: "t-456"
+        document_name:
+          type: string
+          example: "guidelines.md"
+        chunks_count:
+          type: integer
+          nullable: true
+          example: 8
+        sourceId:
+          type: string
+          format: uuid
+          nullable: true
+          example: "c0a80123-0000-4000-8000-000000000001"
+
+    IndexingFailedCallbackEvent:
+      type: object
+      required:
+        - event
+        - request_id
+        - user_id
+        - room_id
+        - document_name
+        - error
+      properties:
+        event:
+          type: string
+          enum:
+            - indexing_failed
+          example: "indexing_failed"
+        request_id:
+          type: string
+          example: "upload-1788192000-xyz"
+        user_id:
+          type: string
+          example: "user-123"
+        room_id:
+          type: string
+          example: "GENERAL"
+        thread_id:
+          type: string
+          nullable: true
+          example: "t-456"
+        document_name:
+          type: string
+          example: "guidelines.md"
+        error:
+          type: string
+          example: "Document could not be parsed"
+
+    RocketchatCallbackPayload:
+      oneOf:
+        - $ref: "#/components/schemas/ChatCompletedCallbackEvent"
+        - $ref: "#/components/schemas/ChatFailedCallbackEvent"
+        - $ref: "#/components/schemas/IndexingCompleteCallbackEvent"
+        - $ref: "#/components/schemas/IndexingFailedCallbackEvent"
+      discriminator:
+        propertyName: event

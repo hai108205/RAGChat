@@ -327,101 +327,26 @@ export const rangeSchema = {
     }),
 };
 
-export const rocketchatAsyncMessageSchema = {
-    body: z.object({
-        workspaceId: z.string().optional(),
-        rocketUserId: z.string().min(1, "rocketUserId is required"),
-        roomId: z.string().min(1, "roomId is required"),
-        threadId: z.string().optional().nullable(),
-        placeholderId: z.string().optional().nullable(),
-        requestId: z.string().min(1, "requestId is required"),
-        query: z.string().min(1, "query is required"),
-        history: z
-            .array(
-                z.object({
-                    role: z.string(),
-                    content: z.string(),
-                }),
-            )
-            .optional(),
-        model: z.string().optional(),
-        provider: z.string().optional(),
-        callbackUrl: z.string().optional().nullable(),
-    }),
-};
-
-export const rocketchatStatsSchema = {
-    query: z.object({
-        workspaceId: z.string().optional(),
-        roomId: z.string().optional(),
-        threadId: z.string().optional(),
-    }),
-};
-
-export const rocketchatBase64SourceSchema = {
-    body: z.object({
-        workspaceId: z.string().optional(),
-        rocketUserId: z.string().min(1, "rocketUserId is required"),
-        roomId: z.string().min(1, "roomId is required"),
-        threadId: z.string().optional().nullable(),
-        filename: z.string().min(1, "filename is required"),
-        contentBase64: z.string().min(1, "contentBase64 is required"),
-        contentType: z.string().optional().nullable(),
-        requestId: z.string().min(1, "requestId is required"),
-        callbackUrl: z.string().optional().nullable(),
-    }),
-};
-
-export const rocketchatUtilityCompletionSchema = {
-    body: z.object({
-        operation: z.enum(["summarize", "explain", "translate", "search"]),
-        text: z.string().optional(),
-        targetLang: z.string().optional(),
-        concept: z.string().optional(),
-        query: z.string().optional(),
-        topK: z.coerce.number().int().min(1).max(50).default(5),
-        workspaceId: z.string().optional(),
-        roomId: z.string().optional(),
-    }),
-};
-
-export const rocketchatSourcesQuerySchema = {
-    query: z.object({
-        workspaceId: z.string().optional(),
-        roomId: z.string().optional(),
-        threadId: z.string().optional(),
-        limit: z.coerce.number().int().min(1).max(100).default(50),
-    }),
-};
-
-export const rocketchatSourceIdParamSchema = {
-    params: z.object({
-        id: z.string().uuid("Invalid source ID"),
-    }),
-};
-
-export const rocketchatDeleteSourceSchema = {
-    params: z.object({
-        id: z.string().uuid("Invalid source ID"),
-    }),
-    query: z.object({
-        workspaceId: z.string().optional(),
-        roomId: z.string().optional(),
-        mode: z.enum(["room", "global"]).default("room"),
-    }),
-};
-
-export const rocketchatFeedbackSchema = {
-    body: z.object({
-        messageId: z.string().optional(),
-        chatMessageId: z.string().uuid("Invalid chatMessageId").optional(),
-        rating: z.enum(["positive", "negative"]),
-        feedbackText: z.string().max(2000).optional(),
-        rocketUserId: z.string().min(1, "rocketUserId is required"),
-        workspaceId: z.string().optional(),
-        roomId: z.string().optional(),
-    }),
-};
-
-
-
+export {
+    ALLOWED_LLM_MODELS,
+    ALLOWED_EMBEDDING_MODELS,
+    llmModelSchema,
+    embeddingModelSchema,
+    temperatureSchema,
+    chatMessageHistorySchema,
+    rocketchatAsyncMessageSchema,
+    rocketchatStatsSchema,
+    rocketchatBase64SourceSchema,
+    rocketchatUtilityCompletionSchema,
+    rocketchatSourcesQuerySchema,
+    rocketchatSourceIdParamSchema,
+    rocketchatDeleteSourceSchema,
+    rocketchatFeedbackSchema,
+    errorEnvelopeSchema,
+    citationSourceSchema,
+    chatCompletedCallbackSchema,
+    chatFailedCallbackSchema,
+    indexingCompleteCallbackSchema,
+    indexingFailedCallbackSchema,
+    rocketchatCallbackPayloadSchema,
+} from "./generated/rocketchatSchemas.js";

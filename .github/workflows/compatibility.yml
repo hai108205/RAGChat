@@ -1,0 +1,46 @@
+name: SDK-Backend Compatibility and Contract Drift
+
+on:
+  push:
+    branches:
+      - main
+      - refactor/backend
+  pull_request:
+    branches:
+      - main
+      - refactor/backend
+
+jobs:
+  contract-compatibility:
+    name: Verify Contract and Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Install Root Dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Install Backend Dependencies
+        run: pnpm --dir backend install --frozen-lockfile=false
+
+      - name: Check Contract Drift & Integrity
+        run: node scripts/check-integration-contract.mjs
+
+      - name: Run SDK-Backend Contract Tests
+        run: pnpm exec vitest run tests/contract/sdk-backend-contract.test.ts
+
+      - name: Run Backend Integration Tests
+        run: |
+          cd backend
+          pnpm exec vitest run tests/integration/rocketchat.integration.test.ts

@@ -40,6 +40,7 @@ For error responses:
 {
   "statusCode": 400,
   "success": false,
+  "data": null,
   "message": "Error description",
   "errors": ["Specific field error or details"]
 }
@@ -182,7 +183,7 @@ Content-Type: application/json
   "success": true,
   "data": {
     "status": "accepted",
-    "sourceId": "source-uuid-456",
+    "jobId": "job-upload-1788192000-xyz",
     "requestId": "upload-1788192000-xyz"
   },
   "message": "Source queued for ingestion"
@@ -283,8 +284,10 @@ When asynchronous operations complete (or fail), the backend POSTs the result to
   "request_id": "upload-1788192000-xyz",
   "user_id": "rocket-user-id",
   "room_id": "rocket-room-id",
+  "thread_id": "optional-thread-id",
   "document_name": "guidelines.md",
-  "chunks_count": 8
+  "chunks_count": 8,
+  "sourceId": "c0a80123-0000-4000-8000-000000000001"
 }
 ```
 

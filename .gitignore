@@ -22,6 +22,8 @@ backend/data/
 
 # Generated clients/dependencies
 backend/generated/
+!backend/types/generated/
+!backend/utils/generated/
 backend/node_modules/
 
 # Local agent/editor state
