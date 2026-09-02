@@ -1,6 +1,7 @@
 import prisma from "../utils/prismaClient.js";
 import logger from "../utils/logger.js";
 import { qdrant } from "../utils/ragClients.js";
+import { ApiError } from "../utils/ApiError.js";
 import {
     generateVectorEmbeddings,
     getEmbeddingDimensionsForModel,
@@ -15,6 +16,13 @@ import {
 
 export interface ScopedVectorSearchInput {
     query: string;
+    scope?: {
+        workspaceId?: string | null;
+        roomId?: string | null;
+        threadId?: string | null;
+        mode?: "room" | "global";
+        allowGlobal?: boolean;
+    };
     workspaceId?: string | null;
     roomId?: string | null;
     threadId?: string | null;
@@ -24,6 +32,8 @@ export interface ScopedVectorSearchInput {
     minScore?: number;
     mode?: "room" | "global";
     allowGlobal?: boolean;
+    throwOnQdrantError?: boolean;
+    fallbackToKeyword?: boolean;
 }
 
 export interface ScopedSearchResult {
@@ -70,8 +80,8 @@ export function deduplicateAndRankResults(
     const sorted = [...results].sort((a, b) => b.relevance - a.relevance);
 
     for (const item of sorted) {
-        // Build deduplication key based on normalized title and snippet prefix
-        const key = `${(item.title || "").trim().toLowerCase()}::${(item.snippet || "").trim().slice(0, 120).toLowerCase()}`;
+        // Build deduplication key based on normalized title and snippet prefix (first 25 chars)
+        const key = `${(item.title || "").trim().toLowerCase()}::${(item.snippet || "").trim().slice(0, 25).toLowerCase()}`;
         if (!seen.has(key)) {
             seen.add(key);
             unique.push(item);
@@ -103,11 +113,13 @@ export async function scopedVectorSearch(
 
     const limit = Math.max(1, Math.min(50, input.limit || input.topK || 5));
     const minScore = typeof input.minScore === "number" ? input.minScore : 0.0;
-    const workspaceId = normalizeWorkspaceId(input.workspaceId);
-    const roomId = normalizeRoomId(input.roomId);
-    const threadId = normalizeThreadId(input.threadId);
-    const mode = input.mode || "room";
-    const allowGlobal = Boolean(input.allowGlobal);
+    const workspaceId = normalizeWorkspaceId(input.scope?.workspaceId ?? input.workspaceId);
+    const roomId = normalizeRoomId(input.scope?.roomId ?? input.roomId);
+    const threadId = normalizeThreadId(input.scope?.threadId ?? input.threadId);
+    const mode = input.scope?.mode ?? input.mode ?? "room";
+    const allowGlobal = Boolean(input.scope?.allowGlobal ?? input.allowGlobal);
+    const throwOnQdrantError = Boolean(input.throwOnQdrantError);
+    const fallbackToKeyword = input.fallbackToKeyword !== false;
 
     // If room mode and no roomId specified, return empty to prevent scope leakage
     if (mode === "room" && !roomId) {
@@ -153,7 +165,10 @@ export async function scopedVectorSearch(
         });
     } catch (dbErr: any) {
         logger.error({ err: dbErr.message }, "Database error fetching scoped ChatSources");
-        return executeKeywordFallback(query, scopeWhere, limit);
+        if (fallbackToKeyword) {
+            return executeKeywordFallback(query, scopeWhere, limit);
+        }
+        return [];
     }
 
     // Filter valid non-empty collection names
@@ -174,7 +189,10 @@ export async function scopedVectorSearch(
 
     if (validSources.length === 0) {
         // No vector collections in scope; try keyword fallback on document pages
-        return executeKeywordFallback(query, scopeWhere, limit);
+        if (fallbackToKeyword) {
+            return executeKeywordFallback(query, scopeWhere, limit);
+        }
+        return [];
     }
 
     // 3. Group collections by (embeddingModel, embeddingDimensions)
@@ -199,6 +217,7 @@ export async function scopedVectorSearch(
     // 4. Query vector spaces per model group
     const rawResults: ScopedSearchResult[] = [];
     let anyQdrantSuccess = false;
+    const qdrantErrors: Error[] = [];
 
     for (const group of modelGroups.values()) {
         let queryVector: number[];
@@ -215,14 +234,23 @@ export async function scopedVectorSearch(
                 { err: embErr.message, model: group.model },
                 "Failed to generate query embedding for model group",
             );
+            qdrantErrors.push(embErr);
             continue;
         }
 
+        // Deduplicate collections in this model group
+        const collectionMap = new Map<string, SourceWithModel>();
         for (const source of group.sources) {
+            if (!collectionMap.has(source.collectionName)) {
+                collectionMap.set(source.collectionName, source);
+            }
+        }
+
+        for (const [collectionName, source] of collectionMap.entries()) {
             try {
                 let points: any[] = [];
                 if (typeof qdrant.query === "function") {
-                    const resp = await qdrant.query(source.collectionName, {
+                    const resp = await qdrant.query(collectionName, {
                         query: queryVector,
                         limit: limit * 2,
                         with_payload: true,
@@ -230,7 +258,7 @@ export async function scopedVectorSearch(
                     });
                     points = Array.isArray(resp?.points) ? resp.points : Array.isArray(resp) ? resp : [];
                 } else if (typeof qdrant.search === "function") {
-                    const resp = await qdrant.search(source.collectionName, {
+                    const resp = await qdrant.search(collectionName, {
                         vector: queryVector,
                         limit: limit * 2,
                         with_payload: true,
@@ -270,7 +298,7 @@ export async function scopedVectorSearch(
                         metadata: {
                             retrievalMode: "vector",
                             sourceId: source.id,
-                            collectionName: source.collectionName,
+                            collectionName,
                             chunkType: payload.chunkType,
                             embeddingModel: group.model,
                             rawScore: pt.score,
@@ -278,16 +306,44 @@ export async function scopedVectorSearch(
                     });
                 }
             } catch (qErr: any) {
-                logger.debug(
-                    { err: qErr.message, collection: source.collectionName },
+                logger.warn(
+                    { err: qErr.message, collection: collectionName },
                     "Qdrant query failed for collection",
                 );
+                qdrantErrors.push(qErr);
             }
         }
     }
 
-    // If Qdrant failed completely or returned no points, fallback to keyword search
-    if (!anyQdrantSuccess || rawResults.length === 0) {
+    // If Qdrant failed completely with errors
+    if (!anyQdrantSuccess && qdrantErrors.length > 0) {
+        if (throwOnQdrantError) {
+            const err = new ApiError(
+                503,
+                `Vector search failed: ${qdrantErrors[0]?.message || "Qdrant service unavailable"}`,
+            );
+            (err as any).code = "QDRANT_UNAVAILABLE";
+            throw err;
+        }
+
+        if (fallbackToKeyword) {
+            const fallbackResults = await executeKeywordFallback(query, scopeWhere, limit);
+            if (fallbackResults.length > 0) {
+                return fallbackResults;
+            }
+        }
+
+        // Qdrant failed completely and no keyword matches were found
+        const err = new ApiError(
+            503,
+            `Vector search failed: ${qdrantErrors[0]?.message || "Qdrant service unavailable"}`,
+        );
+        (err as any).code = "QDRANT_UNAVAILABLE";
+        throw err;
+    }
+
+    // If Qdrant succeeded but returned 0 results, check keyword fallback if enabled
+    if (rawResults.length === 0 && fallbackToKeyword) {
         const fallbackResults = await executeKeywordFallback(query, scopeWhere, limit);
         if (fallbackResults.length > 0) {
             return fallbackResults;
@@ -302,7 +358,7 @@ export async function scopedVectorSearch(
  * Keyword-based fallback search against PostgreSQL DocumentPage/ChatSource.
  * Used when Qdrant is unavailable or collections have not yet finished indexing.
  */
-async function executeKeywordFallback(
+export async function executeKeywordFallback(
     query: string,
     scopeWhere: any,
     limit: number,

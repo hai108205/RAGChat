@@ -831,39 +831,14 @@ export const handleUtilityCompletion = asyncHandler(async (req: Request, res: Re
             embeddingModel,
         } = req.body;
 
-        let results: any[] = [];
-        try {
-            results = await scopedVectorSearch({
-                query,
-                workspaceId,
-                roomId,
-                threadId,
-                limit: topK,
-                embeddingModel,
-            });
-        } catch {
-            results = [];
-        }
-
-        if (results.length === 0) {
-            try {
-                const searchResults = await prisma.documentPage.findMany({
-                    where: {
-                        heading: { contains: query, mode: "insensitive" },
-                    },
-                    take: topK,
-                    include: { chatSource: true },
-                });
-
-                results = searchResults.map((p) => ({
-                    title: p.heading || p.chatSource?.heading || "Document",
-                    snippet: `Found in ${p.chatSource?.heading || "knowledge base"} (${p.pageUrl})`,
-                    relevance: 0.85,
-                }));
-            } catch {
-                // Ignore fallback error
-            }
-        }
+        const results = await scopedVectorSearch({
+            query,
+            workspaceId,
+            roomId,
+            threadId,
+            limit: topK,
+            embeddingModel,
+        });
 
         return res
             .status(200)

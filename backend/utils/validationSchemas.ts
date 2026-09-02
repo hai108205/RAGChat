@@ -327,6 +327,26 @@ export const rangeSchema = {
     }),
 };
 
+import {
+    rocketchatDeleteSourceSchema as baseDeleteSourceSchema,
+    rocketchatFeedbackSchema as baseFeedbackSchema,
+} from "./generated/rocketchatSchemas.js";
+
+export const rocketchatDeleteSourceSchema = {
+    ...baseDeleteSourceSchema,
+    query: baseDeleteSourceSchema.query.extend({
+        actorRocketUserId: z.string().optional(),
+        canManageSources: z.union([z.boolean(), z.string()]).optional(),
+    }),
+};
+
+export const rocketchatFeedbackSchema = {
+    ...baseFeedbackSchema,
+    body: baseFeedbackSchema.body.extend({
+        actorRocketUserId: z.string().optional(),
+    }),
+};
+
 export {
     ALLOWED_LLM_MODELS,
     ALLOWED_EMBEDDING_MODELS,
@@ -340,8 +360,6 @@ export {
     rocketchatUtilityCompletionSchema,
     rocketchatSourcesQuerySchema,
     rocketchatSourceIdParamSchema,
-    rocketchatDeleteSourceSchema,
-    rocketchatFeedbackSchema,
     errorEnvelopeSchema,
     citationSourceSchema,
     chatCompletedCallbackSchema,

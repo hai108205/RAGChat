@@ -884,6 +884,67 @@ describe("Rocket.Chat Integration Router", () => {
             expect(qdrantDeleteCollectionMock).not.toHaveBeenCalled();
             expect(chatSourceDeleteMock).toHaveBeenCalledWith({ where: { id: validSourceId } });
         });
+
+        it("rejects deletion by non-uploader without canManageSources capability", async () => {
+            chatSourceFindUniqueMock.mockResolvedValue({
+                id: validSourceId,
+                rocketchatWorkspaceId: "default",
+                rocketchatRoomId: "room-1",
+                documentationUrl: "rocketchat://default/room-1/doc.md",
+                uploadedByRocketUserId: "original-uploader",
+                collectionName: "rc_123",
+            });
+
+            const app = buildTestApp();
+            const res = await request(app)
+                .delete(`/api/v1/integrations/rocketchat/sources/${validSourceId}?workspaceId=default&roomId=room-1&actorRocketUserId=intruder-user`)
+                .set("Authorization", "Bearer test-secret-token");
+
+            expect(res.status).toBe(403);
+            expect(res.body.message).toMatch(/only the uploader or a user with canManageSources/i);
+        });
+
+        it("allows deletion by original uploader", async () => {
+            chatSourceFindUniqueMock.mockResolvedValue({
+                id: validSourceId,
+                rocketchatWorkspaceId: "default",
+                rocketchatRoomId: "room-1",
+                documentationUrl: "rocketchat://default/room-1/doc.md",
+                uploadedByRocketUserId: "original-uploader",
+                collectionName: "rc_123",
+            });
+            chatSourceCountMock.mockResolvedValue(0);
+            chatSourceDeleteMock.mockResolvedValue({ id: validSourceId });
+
+            const app = buildTestApp();
+            const res = await request(app)
+                .delete(`/api/v1/integrations/rocketchat/sources/${validSourceId}?workspaceId=default&roomId=room-1&actorRocketUserId=original-uploader`)
+                .set("Authorization", "Bearer test-secret-token");
+
+            expect(res.status).toBe(200);
+            expect(res.body.data.deleted).toBe(true);
+        });
+
+        it("allows deletion by moderator with canManageSources=true", async () => {
+            chatSourceFindUniqueMock.mockResolvedValue({
+                id: validSourceId,
+                rocketchatWorkspaceId: "default",
+                rocketchatRoomId: "room-1",
+                documentationUrl: "rocketchat://default/room-1/doc.md",
+                uploadedByRocketUserId: "original-uploader",
+                collectionName: "rc_123",
+            });
+            chatSourceCountMock.mockResolvedValue(0);
+            chatSourceDeleteMock.mockResolvedValue({ id: validSourceId });
+
+            const app = buildTestApp();
+            const res = await request(app)
+                .delete(`/api/v1/integrations/rocketchat/sources/${validSourceId}?workspaceId=default&roomId=room-1&actorRocketUserId=moderator-user&canManageSources=true`)
+                .set("Authorization", "Bearer test-secret-token");
+
+            expect(res.status).toBe(200);
+            expect(res.body.data.deleted).toBe(true);
+        });
     });
 
     describe("POST /feedback", () => {
@@ -902,10 +963,15 @@ describe("Rocket.Chat Integration Router", () => {
             expect(res.status).toBe(400);
         });
 
-        it("successfully records feedback and writes audit log", async () => {
-            userFindFirstMock.mockResolvedValue({ id: "user-feedback-1" });
-            chatMessageFindUniqueMock.mockResolvedValue({ id: validMsgId, chatId: "chat-feedback-1" });
-            auditEventCreateMock.mockResolvedValue({ id: "audit-1" });
+        it("rejects feedback when chat message belongs to another room", async () => {
+            chatMessageFindUniqueMock.mockResolvedValue({
+                id: validMsgId,
+                chatId: "chat-other-room",
+                chat: {
+                    rocketchatWorkspaceId: "team-ws",
+                    rocketchatRoomId: "ROOM_A",
+                },
+            });
 
             const app = buildTestApp();
             const res = await request(app)
@@ -914,6 +980,35 @@ describe("Rocket.Chat Integration Router", () => {
                 .send({
                     workspaceId: "team-ws",
                     rocketUserId: "u777",
+                    roomId: "ROOM_B",
+                    chatMessageId: validMsgId,
+                    rating: "negative",
+                });
+
+            expect(res.status).toBe(403);
+            expect(res.body.message).toMatch(/ChatMessage does not belong to the specified room/i);
+        });
+
+        it("successfully records feedback and writes audit log with actorRocketUserId", async () => {
+            userFindFirstMock.mockResolvedValue({ id: "user-feedback-1" });
+            chatMessageFindUniqueMock.mockResolvedValue({
+                id: validMsgId,
+                chatId: "chat-feedback-1",
+                chat: {
+                    rocketchatWorkspaceId: "team-ws",
+                    rocketchatRoomId: "GENERAL",
+                },
+            });
+            auditEventCreateMock.mockResolvedValue({ id: "audit-1" });
+
+            const app = buildTestApp();
+            const res = await request(app)
+                .post("/api/v1/integrations/rocketchat/feedback")
+                .set("Authorization", "Bearer test-secret-token")
+                .send({
+                    workspaceId: "team-ws",
+                    rocketUserId: "original-asker",
+                    actorRocketUserId: "reviewer-user",
                     roomId: "GENERAL",
                     chatMessageId: validMsgId,
                     rating: "positive",
@@ -933,7 +1028,8 @@ describe("Rocket.Chat Integration Router", () => {
                     userId: "user-feedback-1",
                     chatId: "chat-feedback-1",
                     metadata: expect.objectContaining({
-                        rocketUserId: "u777",
+                        rocketUserId: "original-asker",
+                        actorRocketUserId: "reviewer-user",
                         rating: "positive",
                         feedbackText: "Great and accurate answer!",
                     }),

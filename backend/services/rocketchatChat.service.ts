@@ -183,6 +183,23 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
             },
         });
 
+        // 4b. Persist citation sources if present
+        if (searchResults.length > 0) {
+            try {
+                await prisma.chatMessageSource.createMany({
+                    data: searchResults.map((r) => ({
+                        chatMessageId: chatMessage.id,
+                        heading: r.title || "Document",
+                        chunkText: r.snippet || "",
+                        pageUrl: r.pageUrl || "",
+                        score: Math.round(r.relevance * 100),
+                    })),
+                });
+            } catch (srcErr: any) {
+                logger.debug({ err: srcErr.message }, "Could not record chatMessageSources");
+            }
+        }
+
         // 5. Track token usage
         if (inputTokens > 0 || outputTokens > 0) {
             await prisma.usageEvents.create({
