@@ -125,6 +125,7 @@ export interface Base64UploadPayload {
     rocketUserId: string;
     roomId: string;
     threadId?: string | null;
+    placeholderId?: string | null;
     filename: string;
     contentBase64: string;
     contentType?: string;
@@ -132,6 +133,12 @@ export interface Base64UploadPayload {
     requestId: string;
     embeddingModel?: string;
     callbackUrl?: string;
+}
+
+export interface SearchOptions {
+    workspaceId?: string;
+    threadId?: string | null;
+    embeddingModel?: string;
 }
 
 export interface Base64UploadResponseData {

@@ -8,7 +8,7 @@ import {
 import { IPreFileUpload, IFileUploadContext } from '@rocket.chat/apps-engine/definition/uploads';
 import { ButtonStyle } from '@rocket.chat/apps-engine/definition/uikit/blocks';
 import { BackendClient } from '../lib/BackendClient';
-import { sendMessage, sendMessageWithBlocks } from '../utils/MessageHelper';
+import { sendMessage, sendMessageWithBlocks, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
 import { buildCallbackUrl } from '../utils/CallbackUrl';
 import { Logger } from '../utils/Logger';
 import { createRequestId } from '../utils/RequestId';
@@ -113,6 +113,7 @@ export class FileUploadHandler implements IPreFileUpload {
             details: { filename: file.name, extension: ext, size: file.size },
         });
 
+        let placeholderId: string | undefined;
         try {
             const client = new BackendClient(http, read, this.logger);
             const settings = read.getEnvironmentReader().getSettings();
@@ -198,6 +199,17 @@ export class FileUploadHandler implements IPreFileUpload {
                 }
             }
 
+            // Create indexing placeholder before enqueueing so completion/failure updates it in-place
+            const room = await read.getRoomReader().getById(roomId);
+            if (room) {
+                placeholderId = await sendPlaceholderMessage(
+                    read,
+                    modify,
+                    room,
+                    `📄 _Đang đưa tệp \`${file.name}\` vào hàng đợi lập chỉ mục RAG..._`,
+                );
+            }
+
             // Encode and dispatch to Backend
             const callbackUrl = await buildCallbackUrl(read);
 
@@ -208,6 +220,7 @@ export class FileUploadHandler implements IPreFileUpload {
                 filename: file.name,
                 contentBase64: content.toString('base64'),
                 contentType: file.type || 'application/octet-stream',
+                placeholderId: placeholderId || null,
                 requestId,
                 callbackUrl,
             });
@@ -219,7 +232,7 @@ export class FileUploadHandler implements IPreFileUpload {
                 durationMs: Date.now() - startTime,
                 roomId,
                 userId: rocketUserId,
-                details: { filename: file.name, sourceId: uploadRes.sourceId },
+                details: { filename: file.name, sourceId: uploadRes.sourceId, placeholderId },
             });
         } catch (error: unknown) {
             const durationMs = Date.now() - startTime;
@@ -239,12 +252,17 @@ export class FileUploadHandler implements IPreFileUpload {
             if (!room) {
                 return;
             }
-            await sendMessage(
-                read,
-                modify,
-                room,
-                `⚠️ Không thể đưa tệp **\`${file.name}\`** vào hàng đợi lập chỉ mục RAG: ${message}`,
-            );
+
+            const errorText = `⚠️ Không thể đưa tệp **\`${file.name}\`** vào hàng đợi lập chỉ mục RAG: ${message}`;
+            if (placeholderId) {
+                try {
+                    await updateMessage(placeholderId, read, modify, errorText);
+                } catch {
+                    await sendMessage(read, modify, room, errorText);
+                }
+            } else {
+                await sendMessage(read, modify, room, errorText);
+            }
         }
     }
 

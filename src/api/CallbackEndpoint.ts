@@ -13,15 +13,14 @@ import {
 } from '@rocket.chat/apps-engine/definition/api';
 import { SessionStore } from '../persistence/sessionStore';
 import { saveMessageActionPayload } from '../persistence/messagePayloadStore';
+import { CallbackReceiptStore } from '../persistence/callbackReceiptStore';
+import { CallbackEvent, validateCallbackEvent } from '../types/CallbackEvents';
 import { CitationSource, Formatter } from '../utils/Formatter';
 import { Logger } from '../utils/Logger';
 import { sendMessage, updateMessage } from '../utils/MessageHelper';
 import { readBoolean, readMaxHistory } from '../utils/SettingReader';
 import { asNonEmptyString } from '../utils/Validator';
 import { buildActionButtonsBlock } from '../uikit';
-
-// In-memory set for deduplicating recent callback request IDs (bounded FIFO)
-const processedRequests = new Set<string>();
 
 /**
  * Webhook callback REST API endpoint for the Node.js RAG backend.
@@ -36,8 +35,8 @@ const processedRequests = new Set<string>();
  * - `chat_completed`: Upserts the original placeholder message with final LLM answer & citations,
  *                     then appends the turn to persistent session history.
  * - `chat_failed`: Upserts the placeholder with an error message.
- * - `indexing_complete`: Sends a notification in the room confirming document indexing.
- * - `indexing_failed`: Sends an error notification in the room explaining why indexing failed.
+ * - `indexing_complete`: Sends/updates confirmation of document indexing.
+ * - `indexing_failed`: Sends/updates error explanation of why indexing failed.
  */
 export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
     public path = 'callback';
@@ -54,15 +53,6 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
         persis: IPersistence,
     ): Promise<IApiResponse> {
         const logger = new Logger(this.app.getLogger(), 'CallbackEndpoint');
-        const body = (request.content || {}) as Record<string, unknown>;
-
-        const bodyData = (body.data || {}) as Record<string, unknown>;
-        const event = (body.event as string | undefined) || (bodyData.event as string | undefined);
-        const userId = (body.user_id as string | undefined) || (bodyData.user_id as string | undefined);
-        const roomId = (body.room_id as string | undefined) || (bodyData.room_id as string | undefined);
-        const message = (body.message as string | undefined) || (bodyData.message as string | undefined);
-        const requestId = (body.request_id as string | undefined) || (body.requestId as string | undefined) || (bodyData.request_id as string | undefined);
-        const jobId = (body.job_id as string | undefined) || (body.jobId as string | undefined) || (bodyData.job_id as string | undefined);
 
         // 1. Authentication check:
         // Validate the shared integration token (or legacy api-key) if configured.
@@ -70,15 +60,31 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
             logger.rejected('callback', 'Unauthorized callback request', {
                 event: 'callback.rejected',
                 statusCode: 401,
-                requestId,
-                roomId,
-                userId,
             });
             return {
                 status: 401,
                 content: { error: 'Unauthorized' },
             };
         }
+
+        // 2. Parse & Validate callback event via discriminated union
+        let eventData: CallbackEvent;
+        try {
+            eventData = validateCallbackEvent(request.content);
+        } catch (valErr: unknown) {
+            const errorMsg = valErr instanceof Error ? valErr.message : 'Invalid callback event payload';
+            logger.rejected('callback', errorMsg, {
+                event: 'callback.rejected',
+                statusCode: 400,
+                details: { error: errorMsg },
+            });
+            return {
+                status: 400,
+                content: { error: errorMsg },
+            };
+        }
+
+        const { event, userId, roomId, requestId, jobId, threadId } = eventData;
 
         logger.debug('Received callback event', {
             event: 'callback.received',
@@ -91,33 +97,51 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
             details: { callbackEvent: event },
         });
 
-        // 2. Validate mandatory envelope fields
-        if (!event || !userId || !roomId) {
-            logger.rejected('callback', 'Missing required fields: event, user_id, room_id', {
-                event: 'callback.rejected',
-                statusCode: 400,
-                requestId,
-                details: { hasEvent: Boolean(event), hasUserId: Boolean(userId), hasRoomId: Boolean(roomId) },
-            });
-            return {
-                status: 400,
-                content: { error: 'Missing required fields: event, user_id, room_id' },
-            };
-        }
+        // 3. Idempotency guard via CallbackReceiptStore (Apps-Engine persistence)
+        const receiptStore = new CallbackReceiptStore(read, persis);
+        const receiptKey = jobId || requestId;
 
-        // 3. Idempotency guard:
-        // Prevents processing the same callback twice in case of network retries.
-        if (requestId && processedRequests.has(requestId)) {
+        const claimResult = await receiptStore.claim(receiptKey, event, {
+            jobId,
+            requestId,
+            placeholderId: (eventData as any).placeholderId,
+        });
+
+        if (claimResult.isDuplicate) {
             logger.duplicate('callback', {
                 event: 'callback.duplicate',
                 requestId,
                 jobId,
                 roomId,
                 userId,
+                details: { status: claimResult.receipt.status, event },
             });
             return {
                 status: 200,
                 content: { status: 'ok', detail: 'duplicate ignored' },
+            };
+        }
+
+        if (claimResult.isConflicting) {
+            logger.warn('Conflicting callback event rejected after terminal status', {
+                event: 'callback.conflict',
+                statusCode: 409,
+                requestId,
+                jobId,
+                roomId,
+                userId,
+                details: {
+                    existingStatus: claimResult.receipt.status,
+                    existingEvent: claimResult.receipt.event,
+                    incomingEvent: event,
+                },
+            });
+            return {
+                status: 409,
+                content: {
+                    error: `Conflict: Terminal event already recorded for this job (${claimResult.receipt.event})`,
+                    status: 'conflict',
+                },
             };
         }
 
@@ -126,6 +150,7 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
             const room = await read.getRoomReader().getById(roomId);
 
             if (!user || !room) {
+                await receiptStore.markFailed(receiptKey, event, 'User or room not found');
                 logger.failed('callback', new Error('User or room not found'), {
                     event: 'callback.failed',
                     statusCode: 404,
@@ -142,28 +167,13 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
 
             const settings = read.getEnvironmentReader().getSettings();
 
-            // 4. Dispatch event logic
-            switch (event) {
+            // 4. Dispatch typed event logic
+            switch (eventData.event) {
                 case 'chat_completed': {
-                    const placeholderId = body.placeholder_id as string | undefined;
-                    const threadId = body.thread_id as string | undefined;
-                    const query = body.query as string | undefined;
-                    const answer = asNonEmptyString(body.answer, 'Không nhận được câu trả lời.');
-                    const rawSources = (body.sources as Array<Record<string, unknown>>) || [];
-
-                    // Normalize sources from backend
-                    const sources: CitationSource[] = rawSources.map((s) => {
-                        let relevance = typeof s.relevance === 'number' ? s.relevance : 0;
-                        if (typeof s.score === 'number' && !s.relevance) {
-                            relevance = (s.score as number) > 1 ? (s.score as number) / 100 : (s.score as number);
-                        }
-                        return {
-                            title: (s.title as string) || (s.heading as string) || 'Document',
-                            snippet: (s.snippet as string) || (s.chunkText as string) || (s.body as string) || '',
-                            pageUrl: (s.pageUrl as string) || (s.url as string) || '',
-                            relevance: isNaN(relevance) ? 0 : relevance,
-                        };
-                    });
+                    const placeholderId = eventData.placeholderId || undefined;
+                    const query = eventData.query;
+                    const answer = asNonEmptyString(eventData.answer, 'Không nhận được câu trả lời.');
+                    const sources = eventData.sources || [];
 
                     // Check if citations are enabled by administrator
                     const enableCitations = readBoolean(await settings.getValueById('enable-citations'));
@@ -176,7 +186,7 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                         try {
                             await saveMessageActionPayload(persis, {
                                 messageId: placeholderId,
-                                chatMessageId: body.chat_message_id as string | undefined,
+                                chatMessageId: eventData.chatMessageId || undefined,
                                 query,
                                 rawMarkdown: answer,
                                 sources,
@@ -198,7 +208,7 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                     const blockBuilder = modify.getCreator().getBlockBuilder();
                     buildActionButtonsBlock(blockBuilder, {
                         messageId: placeholderId,
-                        chatMessageId: body.chat_message_id as string | undefined,
+                        chatMessageId: eventData.chatMessageId || undefined,
                         query,
                         sourcesCount: sources.length,
                     });
@@ -214,21 +224,28 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                                 requestId,
                                 roomId,
                             });
-                            await sendMessage(read, modify, room, answer, attachment, threadId);
+                            await sendMessage(read, modify, room, answer, attachment, threadId || undefined);
                         }
                     } else {
-                        await sendMessage(read, modify, room, answer, attachment, threadId);
+                        await sendMessage(read, modify, room, answer, attachment, threadId || undefined);
                     }
+                    await receiptStore.updateCheckpoint(receiptKey, 'PLACEHOLDER_UPDATED');
 
-                    // Append user query + assistant answer to persistent session history
+                    // Append user query + assistant answer to persistent session history once (turnId = requestId)
                     if (query) {
                         const sessionStore = new SessionStore(read, persis);
                         const maxHistory = readMaxHistory(await settings.getValueById('max-history'));
-                        await sessionStore.addMessages(userId, roomId, threadId, [
-                            { role: 'user', content: query, timestamp: Date.now() },
-                            { role: 'assistant', content: answer, timestamp: Date.now() },
+                        await sessionStore.addMessagesOnce(requestId, userId, roomId, threadId || undefined, [
+                            { role: 'user', content: query, timestamp: Date.now(), turnId: requestId },
+                            { role: 'assistant', content: answer, timestamp: Date.now(), turnId: requestId },
                         ], maxHistory);
+                        await receiptStore.updateCheckpoint(receiptKey, 'SESSION_SAVED');
                     }
+
+                    await receiptStore.markCompleted(receiptKey, 'chat_completed', {
+                        sourcesCount: sources.length,
+                        hasPlaceholder: Boolean(placeholderId),
+                    });
 
                     logger.completed('ask', {
                         event: 'callback.completed',
@@ -239,17 +256,16 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                         jobId,
                         roomId,
                         userId,
-                        threadId,
+                        threadId: threadId || undefined,
                         details: { sourcesCount: sources.length, hasPlaceholder: Boolean(placeholderId) },
                     });
                     break;
                 }
 
                 case 'chat_failed': {
-                    const placeholderId = (body.placeholder_id as string | undefined) || (bodyData.placeholder_id as string | undefined);
-                    const threadId = (body.thread_id as string | undefined) || (bodyData.thread_id as string | undefined);
-                    const error = asNonEmptyString(body.error || bodyData.error, 'Không thể hoàn thành câu trả lời.');
-                    const errorCode = asNonEmptyString(body.error_code || bodyData.error_code || bodyData.errorCode, 'CHAT_FAILED');
+                    const placeholderId = eventData.placeholderId || undefined;
+                    const error = asNonEmptyString(eventData.error, 'Không thể hoàn thành câu trả lời.');
+                    const errorCode = asNonEmptyString(eventData.errorCode, 'CHAT_FAILED');
                     const errorMsg = `❌ **Lỗi phản hồi:** ${error}`;
 
                     if (placeholderId) {
@@ -262,11 +278,14 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                                 requestId,
                                 roomId,
                             });
-                            await sendMessage(read, modify, room, errorMsg, undefined, threadId);
+                            await sendMessage(read, modify, room, errorMsg, undefined, threadId || undefined);
                         }
                     } else {
-                        await sendMessage(read, modify, room, errorMsg, undefined, threadId);
+                        await sendMessage(read, modify, room, errorMsg, undefined, threadId || undefined);
                     }
+                    await receiptStore.updateCheckpoint(receiptKey, 'PLACEHOLDER_UPDATED');
+
+                    await receiptStore.markFailed(receiptKey, 'chat_failed', error, { errorCode });
 
                     logger.failed('ask', new Error(error), {
                         event: 'callback.failed',
@@ -277,7 +296,7 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                         jobId,
                         roomId,
                         userId,
-                        threadId,
+                        threadId: threadId || undefined,
                         errorCode,
                         errorMessage: error,
                     });
@@ -285,14 +304,32 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                 }
 
                 case 'indexing_complete': {
-                    const docName = (body.document_name as string) || (body.filename as string) || 'Unknown';
-                    const chunksCount = (body.chunks_count as number) || 0;
-                    await sendMessage(
-                        read, modify, room,
-                        `✅ **Document Indexed:** \`${docName}\` (${chunksCount} chunks)`,
-                        undefined,
-                        body.thread_id as string | undefined,
-                    );
+                    const docName = eventData.documentName || 'Unknown';
+                    const chunksCount = eventData.chunksCount || 0;
+                    const placeholderId = eventData.placeholderId || undefined;
+                    const text = `✅ **Document Indexed:** \`${docName}\` (${chunksCount} chunks)`;
+
+                    if (placeholderId) {
+                        try {
+                            await updateMessage(placeholderId, read, modify, text, undefined);
+                        } catch {
+                            logger.warn('Indexing placeholder update failed, falling back to new message', {
+                                event: 'ui.fallback',
+                                operation: 'updateMessage',
+                                requestId,
+                                roomId,
+                            });
+                            await sendMessage(read, modify, room, text, undefined, threadId || undefined);
+                        }
+                    } else {
+                        await sendMessage(read, modify, room, text, undefined, threadId || undefined);
+                    }
+                    await receiptStore.updateCheckpoint(receiptKey, 'PLACEHOLDER_UPDATED');
+
+                    await receiptStore.markCompleted(receiptKey, 'indexing_complete', {
+                        filename: docName,
+                        chunksCount,
+                    });
 
                     logger.completed('upload', {
                         event: 'index.completed',
@@ -309,14 +346,29 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                 }
 
                 case 'indexing_failed': {
-                    const docName = (body.document_name as string) || (body.filename as string) || 'Unknown';
-                    const error = (body.error as string) || 'Unknown error';
-                    await sendMessage(
-                        read, modify, room,
-                        `❌ **Indexing Failed:** \`${docName}\` — ${error}`,
-                        undefined,
-                        body.thread_id as string | undefined,
-                    );
+                    const docName = eventData.documentName || 'Unknown';
+                    const error = eventData.error || 'Unknown error';
+                    const placeholderId = eventData.placeholderId || undefined;
+                    const text = `❌ **Indexing Failed:** \`${docName}\` — ${error}`;
+
+                    if (placeholderId) {
+                        try {
+                            await updateMessage(placeholderId, read, modify, text, undefined);
+                        } catch {
+                            logger.warn('Indexing placeholder update failed, falling back to new message', {
+                                event: 'ui.fallback',
+                                operation: 'updateMessage',
+                                requestId,
+                                roomId,
+                            });
+                            await sendMessage(read, modify, room, text, undefined, threadId || undefined);
+                        }
+                    } else {
+                        await sendMessage(read, modify, room, text, undefined, threadId || undefined);
+                    }
+                    await receiptStore.updateCheckpoint(receiptKey, 'PLACEHOLDER_UPDATED');
+
+                    await receiptStore.markFailed(receiptKey, 'indexing_failed', error, { filename: docName });
 
                     logger.failed('upload', new Error(error), {
                         event: 'index.failed',
@@ -332,29 +384,6 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                     });
                     break;
                 }
-
-                default: {
-                    if (message) {
-                        await sendMessage(read, modify, room, message);
-                    } else {
-                        logger.warn(`Unknown callback event: ${event}`, {
-                            event: 'callback.unknown',
-                            requestId,
-                            details: { eventName: event },
-                        });
-                    }
-                }
-            }
-
-            // 5. Track request ID in bounded cache
-            if (requestId) {
-                processedRequests.add(requestId);
-                if (processedRequests.size > 1000) {
-                    const firstItem = processedRequests.values().next().value;
-                    if (firstItem) {
-                        processedRequests.delete(firstItem);
-                    }
-                }
             }
 
             return {
@@ -363,6 +392,8 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
             };
         } catch (error: unknown) {
             const errMsg = error instanceof Error ? error.message : 'Callback processing failed';
+            await receiptStore.updateCheckpoint(receiptKey, 'PROCESSING_ERROR', { error: errMsg });
+
             logger.failed('callback', error, {
                 event: 'callback.failed',
                 statusCode: 500,

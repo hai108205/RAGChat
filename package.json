@@ -4,7 +4,7 @@
         "test:sdk-fix": "node scripts/sdk-fix-checks.cjs",
         "typecheck:sdk": "tsc --noEmit -p tsconfig.sdk.json",
         "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
-        "test:unit": "vitest run tests/01_BackendClient.test.ts tests/04_E2E_Commands_And_Handlers.test.ts",
+        "test:unit": "vitest run tests/01_BackendClient.test.ts tests/04_E2E_Commands_And_Handlers.test.ts tests/07_Callback_Idempotency.test.ts",
         "test:contract": "vitest run tests/contract/",
         "generate:contract": "node scripts/generate-contract.mjs",
         "check:contract": "node scripts/check-integration-contract.mjs"

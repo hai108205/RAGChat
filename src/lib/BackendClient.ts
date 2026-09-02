@@ -23,6 +23,7 @@ import {
     DeleteSourceResponseData,
     FeedbackPayload,
     IntegrationStatsData,
+    SearchOptions,
     SearchResult,
     SourceDocument,
     SourcesListData,
@@ -62,6 +63,8 @@ export const HTTP_TIMEOUT = {
 
 export {
     BackendAskOptions,
+    SearchOptions,
+    DeleteSourceOptions,
     SearchResult,
     SourceDocument,
     SourcesListData,
@@ -279,6 +282,7 @@ export class BackendClient {
             const mergedPayload: FeedbackPayload = {
                 ...payload,
                 workspaceId: finalWorkspaceId,
+                ...(payload.actorRocketUserId ? { actorRocketUserId: payload.actorRocketUserId } : {}),
             };
 
             const response = await this.post('/api/v1/integrations/rocketchat/feedback', mergedPayload, HTTP_TIMEOUT.MANAGEMENT, reqId);
@@ -306,6 +310,7 @@ export class BackendClient {
             ...payload,
             workspaceId: payload.workspaceId || runtimeSettings.workspaceId || 'default',
             embeddingModel: payload.embeddingModel || runtimeSettings.embeddingModel,
+            placeholderId: payload.placeholderId || null,
             requestId: reqId,
         };
 
@@ -445,7 +450,7 @@ export class BackendClient {
         _userId?: string,
         roomId?: string,
         requestId?: string,
-        options?: { embeddingModel?: string; workspaceId?: string; threadId?: string | null },
+        options?: SearchOptions,
     ): Promise<SearchResult[]> {
         const reqId = requestId || createRequestId('search');
         try {

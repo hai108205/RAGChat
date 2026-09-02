@@ -11,10 +11,12 @@ export interface ChatMessage {
     role: 'user' | 'assistant';
     content: string;
     timestamp: number;
+    turnId?: string;
 }
 
 interface SessionData {
     messages: ChatMessage[];
+    processedTurns?: string[];
     createdAt: number;
     updatedAt: number;
 }
@@ -90,6 +92,59 @@ export class SessionStore {
         return this.enqueue(scope, () =>
             this.append(userId, roomId, threadId, newMessages, maxHistory),
         );
+    }
+
+    /**
+     * Appends new messages to session history only if `turnId` has not been applied yet.
+     * Prevents duplicate history turns when callbacks or worker deliveries are retried.
+     */
+    public addMessagesOnce(
+        turnId: string,
+        userId: string,
+        roomId: string,
+        threadId: string | undefined,
+        newMessages: ChatMessage[],
+        maxHistory?: number,
+    ): Promise<boolean> {
+        const scope = this.scopeKey(userId, roomId, threadId);
+        return this.enqueue(scope, async () => {
+            const assocs = this.getAssociations(userId, roomId, threadId);
+            const existing = await this.read
+                .getPersistenceReader()
+                .readByAssociations(assocs);
+
+            const prior = this.normalizeSessionData(existing[0] ?? null);
+            const processedTurns = prior.processedTurns || [];
+
+            if (turnId && processedTurns.includes(turnId)) {
+                return false;
+            }
+
+            const now = Date.now();
+            const limit = this.resolveLimit(
+                maxHistory,
+                prior.messages.length + newMessages.length,
+            );
+
+            const taggedMessages = newMessages.map((m) => ({
+                ...m,
+                turnId: m.turnId || turnId,
+            }));
+
+            const updatedTurns = turnId
+                ? [...processedTurns.slice(-100), turnId]
+                : processedTurns;
+
+            const data: SessionData = {
+                messages: [...prior.messages, ...taggedMessages].slice(-limit),
+                processedTurns: updatedTurns,
+                createdAt: prior.createdAt || now,
+                updatedAt: now,
+            };
+
+            await this.persistence.updateByAssociations(assocs, data, true);
+            return true;
+        });
     }
 
     /**
@@ -216,6 +271,9 @@ export class SessionStore {
                 typeof m.timestamp === 'number' &&
                 (m.role === 'user' || m.role === 'assistant'),
         );
-        return { messages: validMessages, createdAt, updatedAt };
+        const processedTurns = Array.isArray(record.processedTurns)
+            ? record.processedTurns.filter((t: unknown): t is string => typeof t === 'string')
+            : [];
+        return { messages: validMessages, processedTurns, createdAt, updatedAt };
     }
 }
