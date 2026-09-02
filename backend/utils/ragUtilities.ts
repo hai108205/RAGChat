@@ -67,6 +67,25 @@ function getCrawlConfig(): CrawlConfig {
 }
 
 async function generateVectorEmbeddings(input: string | string[]): Promise<number[] | number[][]> {
+    if (process.env.NODE_ENV === "test" && (!process.env.OPENROUTER_EMBEDDING_API_KEY || process.env.OPENROUTER_EMBEDDING_API_KEY.startsWith("test-"))) {
+        const createDummyVector = (text: string): number[] => {
+            const vec = new Array(1536).fill(0.01);
+            let hash = 0;
+            for (let i = 0; i < text.length; i++) {
+                hash = ((hash << 5) - hash) + text.charCodeAt(i);
+                hash |= 0;
+            }
+            vec[0] = Math.sin(hash) * 0.1;
+            vec[1] = Math.cos(hash) * 0.1;
+            return vec;
+        };
+
+        if (Array.isArray(input)) {
+            return input.map(createDummyVector);
+        }
+        return createDummyVector(input);
+    }
+
     const response = await getOpenAIClient().embeddings.create({
         model: "openai/text-embedding-3-small",
         input: input,

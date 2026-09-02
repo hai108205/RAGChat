@@ -126,6 +126,31 @@ export async function sendRocketChatCallback(
 }
 
 function getLLMClient(): OpenAI {
+    if (process.env.NODE_ENV === "test" && (!process.env.OPENROUTER_LLM_API_KEY || process.env.OPENROUTER_LLM_API_KEY.startsWith("test-"))) {
+        return {
+            chat: {
+                completions: {
+                    create: async ({ messages }: { messages: any[] }) => {
+                        const lastUser = messages.find((m) => m.role === "user")?.content || "";
+                        return {
+                            choices: [
+                                {
+                                    message: {
+                                        content: `AI completion response for: ${lastUser}`,
+                                    },
+                                },
+                            ],
+                            usage: {
+                                prompt_tokens: 20,
+                                completion_tokens: 30,
+                            },
+                        };
+                    },
+                },
+            },
+        } as any;
+    }
+
     const apiKey =
         process.env.OPENROUTER_LLM_API_KEY ||
         process.env.OPENAI_API_KEY ||
