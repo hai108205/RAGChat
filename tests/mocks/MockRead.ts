@@ -94,6 +94,19 @@ export class MockRead implements IRead {
         this.settings.set(id, value);
     }
 
+    public setUser(idOrUsername: string, user: IUser) {
+        this.users.set(idOrUsername, user);
+        if (user.id) this.users.set(user.id, user);
+        if (user.username) this.users.set(user.username, user);
+    }
+
+    public setRoom(idOrName: string, room: IRoom) {
+        this.rooms.set(idOrName, room);
+        if (room.id) this.rooms.set(room.id, room);
+        if (room.displayName) this.rooms.set(room.displayName, room);
+        if (room.slugifiedName) this.rooms.set(room.slugifiedName, room);
+    }
+
     public setUploadBuffer(id: string, buffer: Buffer) {
         this.uploadBuffers.set(id, buffer);
     }
@@ -186,7 +199,20 @@ export class MockRead implements IRead {
         };
     }
 
-    public getMessageReader(): any { return {} as any; }
+    private messages: Map<string, any> = new Map();
+
+    public setMessage(id: string, msg: any) {
+        this.messages.set(id, msg);
+    }
+
+    public getMessageReader(): any {
+        return {
+            getById: async (id: string) => this.messages.get(id) || null,
+            getRoomMessages: async () => Array.from(this.messages.values()),
+            getSenderMessages: async () => [],
+            getThreadMessages: async () => [],
+        };
+    }
     public getLivechatReader(): any { return {} as any; }
     public getModify(): any { return {} as any; }
     public getNotifier(): any { return {} as any; }
