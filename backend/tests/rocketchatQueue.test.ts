@@ -31,19 +31,21 @@ vi.mock("../utils/prismaClient.js", () => ({
 // Mock BullMQ Queue — track add() calls
 const mockQueueAdd = vi.fn().mockResolvedValue({ id: "bull-job-id" });
 const mockQueueClose = vi.fn().mockResolvedValue(undefined);
+const mockWorkerOn = vi.fn();
+const mockWorkerClose = vi.fn().mockResolvedValue(undefined);
 
-vi.mock("bullmq", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("bullmq")>();
+vi.mock("bullmq", () => {
+    const MockQueue = function (this: any) {
+        this.add = mockQueueAdd;
+        this.close = mockQueueClose;
+    };
+    const MockWorker = function (this: any) {
+        this.on = mockWorkerOn;
+        this.close = mockWorkerClose;
+    };
     return {
-        ...actual,
-        Queue: vi.fn().mockImplementation(() => ({
-            add: mockQueueAdd,
-            close: mockQueueClose,
-        })),
-        Worker: vi.fn().mockImplementation(() => ({
-            on: vi.fn(),
-            close: vi.fn().mockResolvedValue(undefined),
-        })),
+        Queue: MockQueue,
+        Worker: MockWorker,
     };
 });
 

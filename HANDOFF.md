@@ -1,4 +1,4 @@
-﻿# Handoff: SDK-Backend Compatibility Implementation
+# Handoff: SDK-Backend Compatibility Implementation
 
 **Ngay tao:** 2026-09-02T21:20 +07:00
 **Branch:** refactor/backend
@@ -7,7 +7,7 @@
 
 ---
 
-## COMPLETED (7 Tasks)
+## COMPLETED (8 Tasks)
 
 ### Task 1 - Contract drift gate [DONE]
 - Commit: 18b9eb7 test(contract): freeze Rocket.Chat integration API
@@ -68,31 +68,22 @@
 - Created tests/contract/compatibility-matrix.test.ts
 - Scripts: typecheck:sdk, test:unit, test:contract
 
+### Task 5 - Durable BullMQ jobs [DONE]
+- Commit: feat(queue): make Rocket.Chat async jobs durable and idempotent
+- backend/utils/rocketchatQueue.ts - BullMQ Queue, deterministic job ID: rc-job-${workspaceId}-${type}-${requestId}
+- backend/workers/rocketchatIntegrationWorker.ts - Worker, concurrency configurable, retries, backoff, graceful shutdown
+- backend/services/rocketchatChat.service.ts - pure RAG service, LLM error -> throw -> chat_failed callback
+- backend/services/rocketchatIngestion.service.ts - pure ingestion service, callback handling
+- backend/prisma/schema.prisma - RocketChatIntegrationJob model: id, type, workspaceId, roomId, threadId, requestId, status, payload, attempts, error, timestamps, @@unique([workspaceId, requestId, type])
+- backend/prisma/migrations/20260902_add_rocketchat_integration_jobs/
+- backend/controllers/rocketchatIntegration.controller.ts - handleAsyncMessage and handleBase64Source thin: validate -> enqueueRocketChatJob -> 202
+- backend/package.json - worker:integration script
+- docker/docker-compose.yml - integration-worker service
+- 11/11 queue tests pass, 41/41 integration tests pass, 141/141 total backend tests pass
+
 ---
 
-## REMAINING (5 Tasks)
-
-### Task 5 - Durable BullMQ jobs [NOT STARTED]
-IMPORTANT: backend/tests/rocketchatQueue.test.ts has UNCOMMITTED CHANGES - review first!
-
-Files to create:
-- backend/utils/rocketchatQueue.ts - BullMQ Queue, deterministic job ID: rc-${workspaceId}-${requestId}-${type}
-- backend/workers/rocketchatIntegrationWorker.ts - Worker, concurrency=2, 3 retries, backoff, graceful shutdown
-- backend/services/rocketchatChat.service.ts - pure RAG service, LLM error -> throw -> chat_failed callback
-- backend/prisma/migrations/20260903_add_rocketchat_integration_jobs/migration.sql
-
-Files to modify:
-- backend/prisma/schema.prisma - add RocketChatIntegrationJob model:
-  id, type (chat|ingestion), workspaceId, roomId, threadId?, requestId, status (PENDING|PROCESSING|COMPLETED|FAILED), payload Json, attempts Int, error?, timestamps
-  @@unique([workspaceId, requestId, type])
-- backend/controllers/rocketchatIntegration.controller.ts - handleAsyncMessage and handleBase64Source thin: validate -> upsert job -> queue.add -> 202
-- backend/index.ts - start worker, Redis health check
-- backend/Dockerfile - worker entrypoint
-- docker/docker-compose.yml - add integration-worker service
-- backend/package.json - add worker script
-
-Impact gate: node .gitnexus/run.cjs impact -r RAGChat --direction upstream handleAsyncMessage
-Commit: feat(queue): make Rocket.Chat async jobs durable and idempotent
+## REMAINING (4 Tasks)
 
 ### Task 7 - Semantic vector search [NOT STARTED]
 DEPENDS ON: Task 5 (needs rocketchatChat.service.ts)

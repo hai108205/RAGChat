@@ -173,5 +173,22 @@ export async function enqueueRocketChatJob(
     };
 }
 
-// Alias used by index.ts for graceful shutdown compatibility
-export { closeRocketChatQueue as closeQdrantCleanupQueue };
+export const QDRANT_CLEANUP_QUEUE_NAME = "qdrantCleanup";
+
+let qdrantCleanupQueue: Queue | null = null;
+
+export function getQdrantCleanupQueue(): Queue {
+    if (!qdrantCleanupQueue) {
+        qdrantCleanupQueue = new Queue(QDRANT_CLEANUP_QUEUE_NAME, {
+            connection: redis as any,
+        });
+    }
+    return qdrantCleanupQueue;
+}
+
+export async function closeQdrantCleanupQueue(): Promise<void> {
+    if (qdrantCleanupQueue) {
+        await qdrantCleanupQueue.close();
+        qdrantCleanupQueue = null;
+    }
+}

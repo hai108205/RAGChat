@@ -57,6 +57,19 @@ export async function deleteSourceWithCleanup(
     const ws = normalizeWorkspaceId(workspaceId);
     const rm = normalizeRoomId(roomId);
 
+    if (mode === "global") {
+        if (!allowGlobal) {
+            throw new ApiError(403, "Global mode is restricted");
+        }
+    } else {
+        if (!rm) {
+            throw new ApiError(
+                400,
+                "workspaceId and roomId are required for room-scoped source deletion",
+            );
+        }
+    }
+
     const source = await prisma.chatSource.findUnique({
         where: { id: sourceId },
     });

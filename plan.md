@@ -242,14 +242,14 @@ Do `BackendClient` là CRITICAL, ưu tiên thêm overload/options ở cuối ho�
 - Test: `backend/tests/rocketchatQueue.test.ts`
 - Test: `backend/tests/integration/rocketchat.integration.test.ts`
 
-- [ ] **Step 1: Impact gate** cho `handleAsyncMessage`, `handleBase64Source`, queue shutdown và Docker worker entrypoint.
-- [ ] **Step 2: Viết test đỏ**: 202 chỉ sau khi job đã persist/enqueue; duplicate `(workspaceId, requestId, type)` không enqueue lần hai; process controller restart không mất job; retry không tạo duplicate DB message/source.
-- [ ] **Step 3: Thêm model `RocketChatIntegrationJob`** gồm `id`, `type`, scope, `requestId`, `status`, payload JSON, attempt, error, timestamps và unique composite.
-- [ ] **Step 4: Controller mỏng**: validate → create/find job idempotent → `queue.add` với deterministic job ID → trả 202 trong budget. Không gọi LLM/Qdrant/Prisma heavy work sau response.
-- [ ] **Step 5: Worker riêng** xử lý `chat` và `ingestion`, concurrency/env riêng, exponential backoff + jitter, dead-letter status và graceful shutdown.
-- [ ] **Step 6: Tách service thuần** để unit test không cần HTTP server. Lỗi LLM phải throw và tạo `chat_failed`, không phát `chat_completed` với apology text.
-- [ ] **Step 7: Compose** chạy worker mới; readiness backend kiểm tra Redis queue; worker health/metrics riêng.
-- [ ] **Step 8: Test restart/retry, `detect_changes`, commit**: `feat(queue): make Rocket.Chat async jobs durable and idempotent`.
+- [x] **Step 1: Impact gate** cho `handleAsyncMessage`, `handleBase64Source`, queue shutdown và Docker worker entrypoint.
+- [x] **Step 2: Viết test đỏ**: 202 chỉ sau khi job đã persist/enqueue; duplicate `(workspaceId, requestId, type)` không enqueue lần hai; process controller restart không mất job; retry không tạo duplicate DB message/source.
+- [x] **Step 3: Thêm model `RocketChatIntegrationJob`** gồm `id`, `type`, scope, `requestId`, `status`, payload JSON, attempt, error, timestamps và unique composite.
+- [x] **Step 4: Controller mỏng**: validate → create/find job idempotent → `queue.add` với deterministic job ID → trả 202 trong budget. Không gọi LLM/Qdrant/Prisma heavy work sau response.
+- [x] **Step 5: Worker riêng** xử lý `chat` và `ingestion`, concurrency/env riêng, exponential backoff + jitter, dead-letter status và graceful shutdown.
+- [x] **Step 6: Tách service thuần** để unit test không cần HTTP server. Lỗi LLM phải throw và tạo `chat_failed`, không phát `chat_completed` với apology text.
+- [x] **Step 7: Compose** chạy worker mới; readiness backend kiểm tra Redis queue; worker health/metrics riêng.
+- [x] **Step 8: Test restart/retry, `detect_changes`, commit**: `feat(queue): make Rocket.Chat async jobs durable and idempotent`.
 
 ## Task 6: Parse đúng toàn bộ định dạng file SDK hỗ trợ
 

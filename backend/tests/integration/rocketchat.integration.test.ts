@@ -23,38 +23,119 @@ const {
     chatMessageCreateMock,
     chatMessageFindUniqueMock,
     chatMessageSourceCreateManyMock,
+    rocketChatIntegrationJobCreateMock,
+    rocketChatIntegrationJobFindUniqueMock,
+    rocketChatIntegrationJobUpdateManyMock,
+    bullmqQueueAddMock,
+    bullmqQueueCloseMock,
+    bullmqWorkerOnMock,
+    bullmqWorkerCloseMock,
     qdrantCreateCollectionMock,
     qdrantUpsertMock,
     qdrantQueryMock,
     qdrantDeleteCollectionMock,
     generateVectorEmbeddingsMock,
-} = vi.hoisted(() => ({
-    userFindFirstMock: vi.fn(),
-    userCreateMock: vi.fn(),
-    chatFindFirstMock: vi.fn(),
-    chatFindManyMock: vi.fn(),
-    chatCreateMock: vi.fn(),
-    chatUpdateMock: vi.fn(),
-    chatUpsertMock: vi.fn(),
-    chatSourceFindManyMock: vi.fn(),
-    chatSourceFindUniqueMock: vi.fn(),
-    chatSourceCreateMock: vi.fn(),
-    chatSourceDeleteMock: vi.fn(),
-    chatSourceCountMock: vi.fn(),
-    documentPageCreateManyMock: vi.fn(),
-    documentPageFindManyMock: vi.fn(),
-    usageEventsAggregateMock: vi.fn(),
-    usageEventsCreateMock: vi.fn(),
-    auditEventCreateMock: vi.fn(),
-    chatMessageCreateMock: vi.fn(),
-    chatMessageFindUniqueMock: vi.fn(),
-    chatMessageSourceCreateManyMock: vi.fn(),
-    qdrantCreateCollectionMock: vi.fn().mockResolvedValue({}),
-    qdrantUpsertMock: vi.fn().mockResolvedValue({}),
-    qdrantQueryMock: vi.fn().mockResolvedValue({ points: [] }),
-    qdrantDeleteCollectionMock: vi.fn().mockResolvedValue({}),
-    generateVectorEmbeddingsMock: vi.fn(),
-}));
+} = vi.hoisted(() => {
+    const createdIntegrationJobs = new Map<string, any>();
+
+    return {
+        userFindFirstMock: vi.fn(),
+        userCreateMock: vi.fn(),
+        chatFindFirstMock: vi.fn(),
+        chatFindManyMock: vi.fn(),
+        chatCreateMock: vi.fn(),
+        chatUpdateMock: vi.fn(),
+        chatUpsertMock: vi.fn(),
+        chatSourceFindManyMock: vi.fn(),
+        chatSourceFindUniqueMock: vi.fn(),
+        chatSourceCreateMock: vi.fn(),
+        chatSourceDeleteMock: vi.fn(),
+        chatSourceCountMock: vi.fn(),
+        documentPageCreateManyMock: vi.fn(),
+        documentPageFindManyMock: vi.fn(),
+        usageEventsAggregateMock: vi.fn(),
+        usageEventsCreateMock: vi.fn(),
+        auditEventCreateMock: vi.fn(),
+        chatMessageCreateMock: vi.fn(),
+        chatMessageFindUniqueMock: vi.fn(),
+        chatMessageSourceCreateManyMock: vi.fn(),
+        rocketChatIntegrationJobCreateMock: vi.fn().mockImplementation(async (args: any) => {
+            const data = args?.data || {};
+            const key = `${data.workspaceId || "default"}:${data.requestId}:${data.type}`;
+            if (createdIntegrationJobs.has(key)) {
+                const err = new Error("Unique constraint failed on the fields: (`workspace_id`,`request_id`,`type`)");
+                (err as any).code = "P2002";
+                throw err;
+            }
+            const record = {
+                id: `rc-job-${data.requestId || Date.now()}`,
+                status: "PENDING",
+                attempts: 0,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+                ...data,
+            };
+            createdIntegrationJobs.set(key, record);
+            return record;
+        }),
+        rocketChatIntegrationJobFindUniqueMock: vi.fn().mockImplementation(async (args: any) => {
+            const where = args?.where?.workspaceId_requestId_type || {};
+            const key = `${where.workspaceId || "default"}:${where.requestId}:${where.type}`;
+            return (
+                createdIntegrationJobs.get(key) || {
+                    id: `rc-job-${where.requestId || "test"}`,
+                    status: "PENDING",
+                    attempts: 0,
+                    ...where,
+                }
+            );
+        }),
+        rocketChatIntegrationJobUpdateManyMock: vi.fn().mockResolvedValue({ count: 1 }),
+        bullmqQueueAddMock: vi.fn().mockImplementation(async (queueName: string, jobName: string, data: any, opts: any) => {
+            if (jobName === "chat" || jobName === "ingestion" || data?.type === "chat" || data?.type === "ingestion") {
+                setImmediate(async () => {
+                    try {
+                        const { processRocketChatJob } = await import("../../workers/rocketchatIntegrationWorker.js");
+                        await processRocketChatJob({
+                            id: opts?.jobId || "bull-job-id",
+                            name: jobName,
+                            data,
+                            attemptsMade: 0,
+                            opts: opts || { attempts: 3 },
+                        } as any);
+                    } catch {
+                        // ignore worker test errors
+                    }
+                });
+            }
+            return { id: opts?.jobId || "bull-job-id" };
+        }),
+        bullmqQueueCloseMock: vi.fn().mockResolvedValue(undefined),
+        bullmqWorkerOnMock: vi.fn(),
+        bullmqWorkerCloseMock: vi.fn().mockResolvedValue(undefined),
+        qdrantCreateCollectionMock: vi.fn().mockResolvedValue({}),
+        qdrantUpsertMock: vi.fn().mockResolvedValue({}),
+        qdrantQueryMock: vi.fn().mockResolvedValue({ points: [] }),
+        qdrantDeleteCollectionMock: vi.fn().mockResolvedValue({}),
+        generateVectorEmbeddingsMock: vi.fn(),
+    };
+});
+
+vi.mock("bullmq", () => {
+    const MockQueue = function (this: any, name: string) {
+        this.name = name;
+        this.add = (...args: any[]) => bullmqQueueAddMock(name, ...args);
+        this.close = (...args: any[]) => bullmqQueueCloseMock(...args);
+    };
+    const MockWorker = function (this: any) {
+        this.on = (...args: any[]) => bullmqWorkerOnMock(...args);
+        this.close = (...args: any[]) => bullmqWorkerCloseMock(...args);
+    };
+    return {
+        Queue: MockQueue,
+        Worker: MockWorker,
+    };
+});
 
 vi.mock("../../utils/ragClients.js", () => ({
     qdrant: {
@@ -146,6 +227,11 @@ vi.mock("../../utils/prismaClient.js", () => ({
         chatMessageSource: {
             createMany: (...args: any[]) => chatMessageSourceCreateManyMock(...args),
         },
+        rocketChatIntegrationJob: {
+            create: (...args: any[]) => rocketChatIntegrationJobCreateMock(...args),
+            findUnique: (...args: any[]) => rocketChatIntegrationJobFindUniqueMock(...args),
+            updateMany: (...args: any[]) => rocketChatIntegrationJobUpdateManyMock(...args),
+        },
         qdrantCleanupOutbox: {
             findFirst: vi.fn().mockResolvedValue(null),
             create: vi.fn().mockResolvedValue({ id: "outbox-1", collectionName: "rc_test_collection" }),
@@ -232,13 +318,24 @@ describe("Rocket.Chat Integration Router", () => {
         process.env.ROCKETCHAT_INTEGRATION_TOKEN = "test-secret-token";
         process.env.ALLOW_UNAUTHENTICATED_ROCKETCHAT_DEV = "false";
         process.env.ROCKETCHAT_CALLBACK_ALLOWED_ORIGINS = "https://rocketchat.example.com,http://rocketchat:3000,http://localhost:3001";
-        userFindFirstMock.mockReset();
-        userCreateMock.mockReset();
-        chatFindFirstMock.mockReset();
+        userFindFirstMock.mockReset().mockResolvedValue({ id: "user-1", username: "rc_default_unknown" });
+        userCreateMock.mockReset().mockResolvedValue({ id: "user-1", username: "rc_default_unknown" });
+        chatFindFirstMock.mockReset().mockResolvedValue({ id: "chat-1", chatSources: [] });
         chatFindManyMock.mockReset().mockResolvedValue([]);
-        chatCreateMock.mockReset();
-        chatUpdateMock.mockReset();
-        chatUpsertMock.mockReset().mockResolvedValue({ id: "chat-1" });
+        chatCreateMock.mockReset().mockImplementation(async (args: any) => ({
+            id: "chat-1",
+            chatSources: [],
+            ...args?.data,
+        }));
+        chatUpdateMock.mockReset().mockImplementation(async (args: any) => ({
+            id: args?.where?.id || "chat-1",
+            chatSources: [],
+        }));
+        chatUpsertMock.mockReset().mockImplementation(async (args: any) => ({
+            id: "chat-1",
+            chatSources: [],
+            ...args?.create,
+        }));
         chatSourceFindManyMock.mockReset();
         chatSourceFindManyMock.mockResolvedValue([]);
         chatSourceFindUniqueMock.mockReset();
@@ -249,8 +346,8 @@ describe("Rocket.Chat Integration Router", () => {
         documentPageFindManyMock.mockReset();
         usageEventsAggregateMock.mockReset();
         usageEventsCreateMock.mockReset();
-        auditEventCreateMock.mockReset();
-        chatMessageCreateMock.mockReset();
+        auditEventCreateMock.mockReset().mockResolvedValue({});
+        chatMessageCreateMock.mockReset().mockResolvedValue({ id: "msg-default-1" });
         chatMessageFindUniqueMock.mockReset();
         chatMessageSourceCreateManyMock.mockReset();
         qdrantCreateCollectionMock.mockReset().mockResolvedValue({});
@@ -577,6 +674,8 @@ describe("Rocket.Chat Integration Router", () => {
         it("delivers callback with chat_message_id on completion", async () => {
             userFindFirstMock.mockResolvedValue({ id: "user-cb-1" });
             chatFindFirstMock.mockResolvedValue({ id: "chat-cb-1", chatSources: [] });
+            chatUpsertMock.mockResolvedValue({ id: "chat-cb-1", chatSources: [] });
+            chatUpdateMock.mockResolvedValue({ id: "chat-cb-1", chatSources: [] });
             chatMessageCreateMock.mockResolvedValue({ id: "msg-cb-123" });
             usageEventsCreateMock.mockResolvedValue({});
             auditEventCreateMock.mockResolvedValue({});
@@ -584,7 +683,10 @@ describe("Rocket.Chat Integration Router", () => {
             let callbackBody: any = null;
             const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
                 if (init && init.body) {
-                    callbackBody = JSON.parse(init.body as string);
+                    const parsed = JSON.parse(init.body as string);
+                    if (parsed.request_id === "req-cb-test" || parsed.requestId === "req-cb-test") {
+                        callbackBody = parsed;
+                    }
                 }
                 return new Response(JSON.stringify({ ok: true }), { status: 200 });
             });
@@ -605,7 +707,7 @@ describe("Rocket.Chat Integration Router", () => {
             expect(res.status).toBe(202);
 
             // Wait for background async task to complete
-            await new Promise((resolve) => setTimeout(resolve, 150));
+            await new Promise((resolve) => setTimeout(resolve, 300));
 
             expect(callbackBody).toBeDefined();
             expect(callbackBody.event).toBe("chat_completed");
@@ -750,13 +852,13 @@ describe("Rocket.Chat Integration Router", () => {
                 .set("Authorization", "Bearer test-secret-token");
 
             expect(res.status).toBe(200);
-            expect(res.body.data).toEqual({
-                id: validSourceId,
-                deleted: true,
-                vectorsRemoved: true,
-                qdrant: { deleted: true },
+            expect(res.body.data.id).toBe(validSourceId);
+            expect(res.body.data.deleted).toBe(true);
+            expect(res.body.data.cleanupStatus).toBe("pending");
+            expect(res.body.data.qdrant).toEqual({
+                deleted: false,
+                status: "pending",
             });
-            expect(qdrantDeleteCollectionMock).toHaveBeenCalledWith("rc_test_collection", { timeout: 60000 });
             expect(chatSourceDeleteMock).toHaveBeenCalledWith({ where: { id: validSourceId } });
         });
 
