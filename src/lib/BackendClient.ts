@@ -942,23 +942,5 @@ export class BackendClient {
 
         return headers;
     }
-
-    /**
-     * Constructs HTTP request headers with Content-Type, correlation ID, and Bearer auth token.
-     */
-    private async buildHeaders(requestId?: string): Promise<Record<string, string>> {
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-            'X-Request-Id': requestId || createRequestId('http'),
-        };
-
-        const token = await this.getIntegrationToken();
-        if (token) {
-            headers['Authorization'] = `Bearer ${token}`;
-        }
-
-        return headers;
-    }
-
 }
 

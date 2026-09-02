@@ -79,71 +79,42 @@ export class BlockActionHandler {
                     if (value.startsWith('chatmsg:')) {
                         chatMessageId = value.replace(/^chatmsg:/, '');
                     } else if (value.trim()) {
-
-export class BlockActionHandler {
-    private logger: Logger;
-
-    constructor(logger?: ILogger | Logger | null) {
-        if (logger instanceof Logger) {
-            this.logger = logger.child('BlockActionHandler');
-        } else {
-            this.logger = new Logger(logger, 'BlockActionHandler');
-        }
-    }
-
-    public async handleBlockAction(
-        context: UIKitBlockInteractionContext,
-        read: IRead,
-        http: IHttp,
-        _persistence: IPersistence,
-        modify: IModify,
-    ): Promise<IUIKitResponse> {
-        const startTime = Date.now();
-        const data = context.getInteractionData();
-        const { actionId, user, room, value, message } = data;
-
-        const client = new BackendClient(http, read, this.logger);
-        let workspaceId = 'default';
-        try {
-            const wsSetting = await read.getEnvironmentReader().getSettings().getValueById('workspace-id');
-            if (typeof wsSetting === 'string' && wsSetting.trim()) {
-                workspaceId = wsSetting.trim();
-            }
-        } catch {
-            // Default workspace
-        }
-
-        const roomId = room?.id || message?.room?.id || '';
-
-        // 1. Feedback handling (👍 / 👎)
-        if (
-            actionId.startsWith('feedback:') ||
-            actionId.startsWith('feedback_') ||
-            actionId === 'feedback-thumbs-up' ||
-            actionId === 'feedback-thumbs-down'
-        ) {
-            const rating = (actionId.includes('negative') || actionId.includes('down') || actionId === 'feedback-thumbs-down')
-                ? 'negative'
-                : 'positive';
-
-            let chatMessageId: string | undefined;
-            let messageId: string | undefined = message?.id;
-
-            if (value) {
-                try {
-                    const parsed = JSON.parse(value);
-                    if (parsed.chatMessageId) chatMessageId = parsed.chatMessageId;
-                    if (parsed.messageId) messageId = parsed.messageId;
-                } catch {
-                    if (value.startsWith('chatmsg:')) {
-                        chatMessageId = value.replace(/^chatmsg:/, '');
-                    } else if (value.trim()) {
                         messageId = value.trim();
                     }
                 }
             }
 
             const requestId = createRequestId('fb');
+            this.logger.started('feedback', {
+                event: 'feedback.started',
+                requestId,
+                roomId,
+                userId: user.id,
+                details: { rating, messageId, chatMessageId },
+            });
+
+            try {
+                await client.submitFeedback({
+                    messageId,
+                    chatMessageId,
+                    rating,
+                    rocketUserId: user.id,
+                    workspaceId,
+                    roomId,
+                }, requestId);
+
+                this.logger.completed('feedback', {
+                    event: 'feedback.completed',
+                    requestId,
+                    durationMs: Date.now() - startTime,
+                    roomId,
+                    userId: user.id,
+                    details: { rating },
+                });
+
+                if (room) {
+                    const emoji = rating === 'positive' ? '👍' : '👎';
+                    await sendNotification(
                         read,
                         modify,
                         user,
