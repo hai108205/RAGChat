@@ -4,6 +4,7 @@ node_modules/
 # rc-apps package output
 dist/
 .tmp-dist/
+.rc_build/
 .rcappsconfig
 .rcappsconfig.json
 
