@@ -1,5 +1,6 @@
 import {
     IHttp,
+    ILogger,
     IModify,
     IPersistence,
     IRead,
@@ -10,6 +11,7 @@ import { BackendClient } from '../lib/BackendClient';
 import { sendMessage, sendMessageWithBlocks } from '../utils/MessageHelper';
 import { buildCallbackUrl } from '../utils/CallbackUrl';
 import { Logger } from '../utils/Logger';
+import { createRequestId } from '../utils/RequestId';
 
 const SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.pptx', '.csv', '.xlsx', '.html'];
 
@@ -27,6 +29,16 @@ const SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.pptx', '.csv', '
  * 6. Non-blocking: returns normally to allow Rocket.Chat file upload to complete seamlessly.
  */
 export class FileUploadHandler implements IPreFileUpload {
+    private logger: Logger;
+
+    constructor(logger?: ILogger | Logger | null) {
+        if (logger instanceof Logger) {
+            this.logger = logger.child('FileUploadHandler');
+        } else {
+            this.logger = new Logger(logger, 'FileUploadHandler');
+        }
+    }
+
     /**
      * Called before a file is committed to storage.
      */
@@ -37,16 +49,33 @@ export class FileUploadHandler implements IPreFileUpload {
         _persis: IPersistence,
         modify: IModify,
     ): Promise<void> {
-        const logger = new Logger(null, 'FileUploadHandler');
+        const startTime = Date.now();
         const { file, content } = context;
 
         const ext = this.getExtension(file.name);
         if (!SUPPORTED_EXTENSIONS.includes(ext)) {
+            this.logger.debug('upload.skipped_unsupported_extension', {
+                event: 'upload.skipped',
+                operation: 'upload_check',
+                details: { filename: file.name, extension: ext },
+            });
             return;
         }
 
+        const requestId = createRequestId('upload');
+        const roomId = file.rid || '';
+        const rocketUserId = file.userId || '';
+
+        this.logger.started('upload', {
+            event: 'index.started',
+            requestId,
+            roomId,
+            userId: rocketUserId,
+            details: { filename: file.name, extension: ext, size: file.size },
+        });
+
         try {
-            const client = new BackendClient(http, read);
+            const client = new BackendClient(http, read, this.logger);
             const settings = read.getEnvironmentReader().getSettings();
             let workspaceId = 'default';
             try {
@@ -57,9 +86,6 @@ export class FileUploadHandler implements IPreFileUpload {
             } catch {
                 // Default workspace
             }
-
-            const roomId = file.rid || '';
-            const rocketUserId = file.userId || '';
 
             // Duplicate & Superseded Document Detection
             if (roomId) {
@@ -79,6 +105,13 @@ export class FileUploadHandler implements IPreFileUpload {
                         });
 
                         if (duplicateOrSuperseded) {
+                            this.logger.warn('upload.duplicate_detected', {
+                                event: 'upload.duplicate_detected',
+                                requestId,
+                                roomId,
+                                details: { filename: file.name, existingSourceId: duplicateOrSuperseded.id, existingFilename: duplicateOrSuperseded.filename },
+                            });
+
                             const room = await read.getRoomReader().getById(roomId);
                             if (room) {
                                 const uploadDate = duplicateOrSuperseded.createdAt
@@ -118,15 +151,18 @@ export class FileUploadHandler implements IPreFileUpload {
                         }
                     }
                 } catch (dupCheckErr) {
-                    logger.warn('Duplicate check check encountered an error, continuing upload', dupCheckErr);
+                    this.logger.warn('Duplicate check encountered an error, continuing upload', {
+                        event: 'upload.duplicate_check_error',
+                        requestId,
+                        errorMessage: dupCheckErr instanceof Error ? dupCheckErr.message : String(dupCheckErr),
+                    });
                 }
             }
 
             // Encode and dispatch to Backend
-            const requestId = `upload-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
             const callbackUrl = await buildCallbackUrl(read);
 
-            await client.uploadBase64({
+            const uploadRes = await client.uploadBase64({
                 workspaceId,
                 rocketUserId,
                 roomId,
@@ -136,9 +172,30 @@ export class FileUploadHandler implements IPreFileUpload {
                 requestId,
                 callbackUrl,
             });
+
+            this.logger.accepted('upload', {
+                event: 'index.accepted',
+                requestId,
+                jobId: uploadRes.jobId,
+                durationMs: Date.now() - startTime,
+                roomId,
+                userId: rocketUserId,
+                details: { filename: file.name, sourceId: uploadRes.sourceId },
+            });
         } catch (error: unknown) {
-            // Surface failure if backend is unreachable so user is aware indexing did not queue
+            const durationMs = Date.now() - startTime;
             const message = error instanceof Error ? error.message : 'Indexing request failed';
+
+            this.logger.failed('upload', error, {
+                event: 'index.failed',
+                requestId,
+                durationMs,
+                roomId,
+                userId: rocketUserId,
+                errorMessage: message,
+                details: { filename: file.name },
+            });
+
             const room = await read.getRoomReader().getById(file.rid);
             if (!room) {
                 return;

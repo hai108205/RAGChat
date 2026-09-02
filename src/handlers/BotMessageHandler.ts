@@ -1,5 +1,6 @@
 import {
     IHttp,
+    ILogger,
     IModify,
     IPersistence,
     IRead,
@@ -15,6 +16,8 @@ import { buildCallbackUrl } from '../utils/CallbackUrl';
 import { ERRORS } from '../constants/Errors';
 import { BOT_PREFIX, BOT_SUB_COMMANDS } from '../constants/Commands';
 import { addSuggestionChipsBlocks } from '../uikit';
+import { Logger } from '../utils/Logger';
+import { createRequestId } from '../utils/RequestId';
 
 /**
  * Event handler for direct messages (1-on-1 DMs) sent to the App bot user.
@@ -27,6 +30,16 @@ import { addSuggestionChipsBlocks } from '../uikit';
  * - Self-loop suppression (ignores messages from the App user itself)
  */
 export class BotMessageHandler implements IPostMessageSentToBot {
+    private logger: Logger;
+
+    constructor(logger?: ILogger | Logger | null) {
+        if (logger instanceof Logger) {
+            this.logger = logger.child('BotMessageHandler');
+        } else {
+            this.logger = new Logger(logger, 'BotMessageHandler');
+        }
+    }
+
     /**
      * Main entry point for direct messages sent to the bot.
      */
@@ -71,14 +84,27 @@ export class BotMessageHandler implements IPostMessageSentToBot {
         persistence: IPersistence,
         modify: IModify,
     ): Promise<void> {
+        const startTime = Date.now();
+        const requestId = createRequestId('botcmd');
+
         if (!input) {
             await sendMessage(read, modify, message.room, Formatter.formatHelpMessage(), undefined, message.threadId);
             return;
         }
 
         const [subCommand] = input.split(/\s+/);
+        const commandLower = subCommand.toLowerCase();
 
-        switch (subCommand.toLowerCase()) {
+        this.logger.started('bot_command', {
+            event: 'bot.command.started',
+            requestId,
+            roomId: message.room.id,
+            userId: message.sender.id,
+            threadId: message.threadId,
+            details: { subCommand: commandLower },
+        });
+
+        switch (commandLower) {
             case BOT_SUB_COMMANDS.START: {
                 const blockBuilder = modify.getCreator().getBlockBuilder();
                 blockBuilder.addSectionBlock({
@@ -86,11 +112,13 @@ export class BotMessageHandler implements IPostMessageSentToBot {
                 });
                 addSuggestionChipsBlocks(blockBuilder);
                 await sendMessageWithBlocks(read, modify, message.room, Formatter.formatWelcomeMessage(), blockBuilder, message.threadId);
+                this.logger.completed('bot_command', { event: 'bot.command.completed', requestId, durationMs: Date.now() - startTime });
                 break;
             }
 
             case BOT_SUB_COMMANDS.STATS: {
-                await this.handleStats(message, read, http, modify);
+                await this.handleStats(message, read, http, modify, requestId);
+                this.logger.completed('bot_command', { event: 'bot.command.completed', requestId, durationMs: Date.now() - startTime });
                 break;
             }
 
@@ -103,6 +131,7 @@ export class BotMessageHandler implements IPostMessageSentToBot {
                 } else {
                     await sendMessage(read, modify, message.room, ERRORS.EMPTY_HISTORY, undefined, message.threadId);
                 }
+                this.logger.completed('bot_command', { event: 'bot.command.completed', requestId, durationMs: Date.now() - startTime, details: { hadHistory: hasHistory } });
                 break;
             }
 
@@ -113,10 +142,12 @@ export class BotMessageHandler implements IPostMessageSentToBot {
                 });
                 addSuggestionChipsBlocks(blockBuilder);
                 await sendMessageWithBlocks(read, modify, message.room, Formatter.formatHelpMessage(), blockBuilder, message.threadId);
+                this.logger.completed('bot_command', { event: 'bot.command.completed', requestId, durationMs: Date.now() - startTime });
                 break;
             }
 
             default: {
+                this.logger.rejected('bot_command', `Unknown subcommand: ${commandLower}`, { event: 'bot.command.rejected', requestId });
                 await sendMessage(
                     read,
                     modify,
@@ -137,9 +168,10 @@ export class BotMessageHandler implements IPostMessageSentToBot {
         read: IRead,
         http: IHttp,
         modify: IModify,
+        requestId?: string,
     ): Promise<void> {
         try {
-            const client = new BackendClient(http, read);
+            const client = new BackendClient(http, read, this.logger);
             const settings = read.getEnvironmentReader().getSettings();
             let workspaceId = 'default';
             try {
@@ -151,7 +183,7 @@ export class BotMessageHandler implements IPostMessageSentToBot {
                 // Default workspace
             }
 
-            const documents = await client.listDocuments(workspaceId, message.room.id, message.threadId);
+            const documents = await client.listDocuments(workspaceId, message.room.id, message.threadId, requestId);
             await sendMessage(read, modify, message.room, Formatter.formatStats(documents), undefined, message.threadId);
         } catch (error: unknown) {
             const errMsg = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
@@ -171,6 +203,18 @@ export class BotMessageHandler implements IPostMessageSentToBot {
         persistence: IPersistence,
         modify: IModify,
     ): Promise<void> {
+        const startTime = Date.now();
+        const requestId = createRequestId('dm');
+
+        this.logger.started('ask', {
+            event: 'request.started',
+            requestId,
+            roomId: message.room.id,
+            userId: message.sender.id,
+            threadId: message.threadId,
+            details: { textLength: text.length },
+        });
+
         // 1. Instant feedback message returned in <100ms
         const placeholderId = await sendPlaceholderMessage(
             read, modify, message.room,
@@ -179,7 +223,7 @@ export class BotMessageHandler implements IPostMessageSentToBot {
         );
 
         try {
-            const client = new BackendClient(http, read);
+            const client = new BackendClient(http, read, this.logger);
             const sessionStore = new SessionStore(read, persistence);
 
             const settings = read.getEnvironmentReader().getSettings();
@@ -195,11 +239,10 @@ export class BotMessageHandler implements IPostMessageSentToBot {
             }
 
             const history = await sessionStore.getHistory(message.sender.id, message.room.id, message.threadId, maxHistory);
-            const requestId = `dm-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
             const callbackUrl = await buildCallbackUrl(read);
 
             // 2. Enqueue async job to backend — results return via CallbackEndpoint
-            await client.askAsync(
+            const response = await client.askAsync(
                 text,
                 message.sender.id,
                 message.room.id,
@@ -210,9 +253,31 @@ export class BotMessageHandler implements IPostMessageSentToBot {
                 workspaceId,
                 callbackUrl,
             );
+
+            this.logger.accepted('ask', {
+                event: 'request.accepted',
+                requestId,
+                jobId: response.job_id,
+                durationMs: Date.now() - startTime,
+                roomId: message.room.id,
+                userId: message.sender.id,
+                threadId: message.threadId,
+                details: { placeholderId, status: response.status },
+            });
         } catch (error: unknown) {
-            // 3. Fallback error handling
+            const durationMs = Date.now() - startTime;
             const errMsg = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+
+            this.logger.failed('ask', error, {
+                event: 'request.failed',
+                requestId,
+                durationMs,
+                roomId: message.room.id,
+                userId: message.sender.id,
+                threadId: message.threadId,
+                errorMessage: errMsg,
+            });
+
             if (placeholderId) {
                 try {
                     await updateMessage(placeholderId, read, modify, errMsg, undefined);

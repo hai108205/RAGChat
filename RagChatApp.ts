@@ -57,7 +57,11 @@ import { Validator } from './src/utils/Validator';
  *   - IPreFileUpload: intercepts document uploads to index them into vector DB
  *   - IUIKitInteractionHandler: handles interactive buttons, modals, and context action clicks
  */
+import { Logger } from './src/utils/Logger';
+
 export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessageSent, IPreFileUpload, IUIKitInteractionHandler {
+    private appLogger: Logger | null = null;
+
     // Lazy-instantiated handlers to optimize memory and lifecycle initialization
     private botHandler: BotMessageHandler | null = null;
     private mentionHandler: MentionHandler | null = null;
@@ -66,44 +70,51 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
     private viewSubmitHandler: ViewSubmitHandler | null = null;
     private actionButtonHandler: ActionButtonHandler | null = null;
 
+    private getAppLogger(): Logger {
+        if (!this.appLogger) {
+            this.appLogger = new Logger(this.getLogger(), 'RagChatApp');
+        }
+        return this.appLogger;
+    }
+
     private getBotHandler(): BotMessageHandler {
         if (!this.botHandler) {
-            this.botHandler = new BotMessageHandler();
+            this.botHandler = new BotMessageHandler(this.getLogger());
         }
         return this.botHandler;
     }
 
     private getMentionHandler(): MentionHandler {
         if (!this.mentionHandler) {
-            this.mentionHandler = new MentionHandler();
+            this.mentionHandler = new MentionHandler(this.getLogger());
         }
         return this.mentionHandler;
     }
 
     private getUploadHandler(): FileUploadHandler {
         if (!this.uploadHandler) {
-            this.uploadHandler = new FileUploadHandler();
+            this.uploadHandler = new FileUploadHandler(this.getLogger());
         }
         return this.uploadHandler;
     }
 
     private getBlockActionHandler(): BlockActionHandler {
         if (!this.blockActionHandler) {
-            this.blockActionHandler = new BlockActionHandler();
+            this.blockActionHandler = new BlockActionHandler(this.getLogger());
         }
         return this.blockActionHandler;
     }
 
     private getViewSubmitHandler(): ViewSubmitHandler {
         if (!this.viewSubmitHandler) {
-            this.viewSubmitHandler = new ViewSubmitHandler();
+            this.viewSubmitHandler = new ViewSubmitHandler(this.getLogger());
         }
         return this.viewSubmitHandler;
     }
 
     private getActionButtonHandler(): ActionButtonHandler {
         if (!this.actionButtonHandler) {
-            this.actionButtonHandler = new ActionButtonHandler();
+            this.actionButtonHandler = new ActionButtonHandler(this.getLogger());
         }
         return this.actionButtonHandler;
     }
@@ -120,17 +131,20 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
         configuration: IConfigurationExtend,
         _environmentRead: IEnvironmentRead,
     ): Promise<void> {
+        const logger = this.getAppLogger();
+        logger.started('extendConfiguration', { event: 'app.lifecycle' });
+
         // 1. Register configurable administration settings
         await registerSettings(configuration);
 
         // 2. Register slash commands concurrently
         await Promise.all([
-            configuration.slashCommands.provideSlashCommand(new AskCommand()),
-            configuration.slashCommands.provideSlashCommand(new SearchCommand()),
-            configuration.slashCommands.provideSlashCommand(new SummarizeCommand()),
-            configuration.slashCommands.provideSlashCommand(new ExplainCommand()),
-            configuration.slashCommands.provideSlashCommand(new TranslateCommand()),
-            configuration.slashCommands.provideSlashCommand(new RagCommand()),
+            configuration.slashCommands.provideSlashCommand(new AskCommand(this.getLogger())),
+            configuration.slashCommands.provideSlashCommand(new SearchCommand(this.getLogger())),
+            configuration.slashCommands.provideSlashCommand(new SummarizeCommand(this.getLogger())),
+            configuration.slashCommands.provideSlashCommand(new ExplainCommand(this.getLogger())),
+            configuration.slashCommands.provideSlashCommand(new TranslateCommand(this.getLogger())),
+            configuration.slashCommands.provideSlashCommand(new RagCommand(this.getLogger())),
         ]);
 
         // 3. Register message context action buttons (right click / meatball menu)
@@ -164,7 +178,10 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
             endpoints: [new CallbackEndpoint(this)],
         });
 
-        this.getLogger().info('RAGChat App configured successfully');
+        logger.completed('extendConfiguration', {
+            event: 'app.lifecycle',
+            details: { commandsCount: 6, actionButtonsCount: 4, apiEndpointsCount: 1 },
+        });
     }
 
     /**
@@ -175,11 +192,17 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
         environment: IEnvironmentRead,
         _configurationModify: IConfigurationModify,
     ): Promise<boolean> {
+        const logger = this.getAppLogger();
+        logger.started('onEnable', { event: 'app.lifecycle' });
+
         const settings = environment.getSettings();
         const backendUrl = await settings.getValueById('backend-url');
 
         if (!backendUrl || typeof backendUrl !== 'string' || !backendUrl.trim()) {
-            this.getLogger().error('Backend URL is not configured — cannot enable RAGChat app');
+            logger.failed('onEnable', new Error('Backend URL is not configured — cannot enable RAGChat app'), {
+                event: 'app.lifecycle',
+                errorCode: 'MISSING_BACKEND_URL',
+            });
             return false;
         }
 
@@ -195,37 +218,39 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
         const devMode = allowDev === true;
 
         if (!hasToken && !devMode) {
-            this.getLogger().error(
-                'Integration token is not configured — set `integration-token` (or legacy `api-key`). ' +
-                'Refusing to enable the public callback endpoint without authentication.',
-            );
+            logger.failed('onEnable', new Error('Integration token is not configured — set `integration-token` (or legacy `api-key`). Refusing to enable the public callback endpoint without authentication.'), {
+                event: 'app.lifecycle',
+                errorCode: 'MISSING_INTEGRATION_TOKEN',
+            });
             return false;
         }
 
         if (!hasToken && devMode) {
-            this.getLogger().warn(
+            logger.warn(
                 '[DEV MODE] RAGChat is running WITHOUT callback authentication. ' +
                 'Anyone who knows the public app URL can spoof backend callbacks. Do NOT use in production.',
+                { event: 'app.lifecycle', errorCode: 'DEV_MODE_UNAUTHENTICATED' },
             );
         }
 
         const callbackBaseUrl = await settings.getValueById('callback-base-url');
         if (!callbackBaseUrl || typeof callbackBaseUrl !== 'string' || !callbackBaseUrl.trim()) {
-            this.getLogger().error(
-                'Callback public URL is not configured — set `callback-base-url` to the public Rocket.Chat URL. ' +
-                'Refusing to enable because async jobs would not be able to update placeholders.',
-            );
+            logger.failed('onEnable', new Error('Callback public URL is not configured — set `callback-base-url` to the public Rocket.Chat URL. Refusing to enable because async jobs would not be able to update placeholders.'), {
+                event: 'app.lifecycle',
+                errorCode: 'MISSING_CALLBACK_BASE_URL',
+            });
             return false;
         }
 
         if (!Validator.isValidUrl(callbackBaseUrl.trim())) {
-            this.getLogger().error(
-                'Callback public URL is invalid — set `callback-base-url` to a valid public Rocket.Chat URL.',
-            );
+            logger.failed('onEnable', new Error('Callback public URL is invalid — set `callback-base-url` to a valid public Rocket.Chat URL.'), {
+                event: 'app.lifecycle',
+                errorCode: 'INVALID_CALLBACK_BASE_URL',
+            });
             return false;
         }
 
-        this.getLogger().info('RAGChat App enabled successfully');
+        logger.completed('onEnable', { event: 'app.lifecycle' });
         return true;
     }
 
@@ -235,7 +260,7 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
     public async onDisable(
         _configurationModify: IConfigurationModify,
     ): Promise<void> {
-        this.getLogger().info('RAGChat App disabled');
+        this.getAppLogger().completed('onDisable', { event: 'app.lifecycle' });
     }
 
     /**
@@ -248,7 +273,7 @@ export class RagChatApp extends App implements IPostMessageSentToBot, IPostMessa
         _persistence: IPersistence,
         _modify: IModify,
     ): Promise<void> {
-        this.getLogger().info('RAGChat App uninstalled');
+        this.getAppLogger().completed('onUninstall', { event: 'app.lifecycle' });
     }
 
     // --- IPostMessageSentToBot: Direct Messages to the bot user ---

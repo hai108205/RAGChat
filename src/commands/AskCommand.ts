@@ -1,5 +1,6 @@
 import {
     IHttp,
+    ILogger,
     IModify,
     IPersistence,
     IRead,
@@ -16,6 +17,8 @@ import { readMaxHistory } from '../utils/SettingReader';
 import { buildCallbackUrl } from '../utils/CallbackUrl';
 import { ERRORS } from '../constants/Errors';
 import { COMMANDS } from '../constants/Commands';
+import { Logger } from '../utils/Logger';
+import { createRequestId } from '../utils/RequestId';
 
 /**
  * /ask slash command — answers questions using RAG (Retrieval-Augmented Generation).
@@ -36,6 +39,16 @@ export class AskCommand implements ISlashCommand {
     public i18nDescription = 'Ask RAGChat a question using document knowledge';
     public providesPreview = false;
 
+    private logger: Logger;
+
+    constructor(logger?: ILogger | Logger | null) {
+        if (logger instanceof Logger) {
+            this.logger = logger.child('AskCommand');
+        } else {
+            this.logger = new Logger(logger, 'AskCommand');
+        }
+    }
+
     public async executor(
         context: SlashCommandContext,
         read: IRead,
@@ -43,17 +56,35 @@ export class AskCommand implements ISlashCommand {
         http: IHttp,
         persis: IPersistence,
     ): Promise<void> {
+        const startTime = Date.now();
         const args = context.getArguments();
         const sender = context.getSender();
         const room = context.getRoom();
         const threadId = context.getThreadId();
+        const requestId = createRequestId('ask');
 
         if (args.length === 0) {
+            this.logger.rejected('ask', 'Missing question argument in /ask command', {
+                event: 'request.rejected',
+                requestId,
+                roomId: room.id,
+                userId: sender.id,
+                threadId,
+            });
             await sendMessage(read, modify, room, Formatter.usageCommand(COMMANDS.ASK, '"your question"'), undefined, threadId);
             return;
         }
 
         const query = args.join(' ');
+
+        this.logger.started('ask', {
+            event: 'request.started',
+            requestId,
+            roomId: room.id,
+            userId: sender.id,
+            threadId,
+            details: { queryLength: query.length },
+        });
 
         // Instant feedback for RAG call
         const placeholderId = await sendPlaceholderMessage(
@@ -63,7 +94,7 @@ export class AskCommand implements ISlashCommand {
         );
 
         try {
-            const client = new BackendClient(http, read);
+            const client = new BackendClient(http, read, this.logger);
             const sessionStore = new SessionStore(read, persis);
 
             const settings = read.getEnvironmentReader().getSettings();
@@ -79,13 +110,10 @@ export class AskCommand implements ISlashCommand {
             }
 
             const history = await sessionStore.getHistory(sender.id, room.id, threadId, maxHistory);
-            const requestId = `ask-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
             const callbackUrl = await buildCallbackUrl(read);
 
             // Enqueue async job to Node backend.
-            // Executor terminates immediately in < 2 seconds, avoiding Rocket.Chat 10s Deno timeout.
-            // Backend processes the query and updates the placeholder via CallbackEndpoint.
-            await client.askAsync(
+            const response = await client.askAsync(
                 query,
                 sender.id,
                 room.id,
@@ -96,8 +124,31 @@ export class AskCommand implements ISlashCommand {
                 workspaceId,
                 callbackUrl,
             );
+
+            this.logger.accepted('ask', {
+                event: 'request.accepted',
+                requestId,
+                jobId: response.job_id,
+                durationMs: Date.now() - startTime,
+                roomId: room.id,
+                userId: sender.id,
+                threadId,
+                details: { placeholderId, status: response.status },
+            });
         } catch (error: unknown) {
+            const durationMs = Date.now() - startTime;
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+
+            this.logger.failed('ask', error, {
+                event: 'request.failed',
+                requestId,
+                durationMs,
+                roomId: room.id,
+                userId: sender.id,
+                threadId,
+                errorMessage: message,
+            });
+
             if (placeholderId) {
                 try {
                     await updateMessage(placeholderId, read, modify, message, undefined);

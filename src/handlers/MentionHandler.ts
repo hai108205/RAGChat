@@ -1,5 +1,6 @@
 import {
     IHttp,
+    ILogger,
     IModify,
     IPersistence,
     IRead,
@@ -15,6 +16,8 @@ import { readMaxHistory } from '../utils/SettingReader';
 import { buildCallbackUrl } from '../utils/CallbackUrl';
 import { ERRORS } from '../constants/Errors';
 import { BOT_PREFIX, BOT_SUB_COMMANDS } from '../constants/Commands';
+import { Logger } from '../utils/Logger';
+import { createRequestId } from '../utils/RequestId';
 
 /**
  * Handles @mentions of the bot in public and private channels / discussions.
@@ -29,6 +32,16 @@ import { BOT_PREFIX, BOT_SUB_COMMANDS } from '../constants/Commands';
  * - RAG Q&A with async background worker dispatch and citation attachment updates
  */
 export class MentionHandler implements IPostMessageSent {
+    private logger: Logger;
+
+    constructor(logger?: ILogger | Logger | null) {
+        if (logger instanceof Logger) {
+            this.logger = logger.child('MentionHandler');
+        } else {
+            this.logger = new Logger(logger, 'MentionHandler');
+        }
+    }
+
     /**
      * Gate method: Determines whether this handler should execute for the incoming message.
      */
@@ -78,7 +91,17 @@ export class MentionHandler implements IPostMessageSent {
 
         // 2. Strip bot mention to extract the actual user question
         const question = this.stripMention(message.text || '', appUser.username).trim();
+        const requestId = createRequestId('mention');
+        const startTime = Date.now();
+
         if (!question) {
+            this.logger.rejected('mention', 'Empty question after stripping mention', {
+                event: 'request.rejected',
+                requestId,
+                roomId: message.room.id,
+                userId: message.sender.id,
+                threadId: message.threadId,
+            });
             await sendMessage(
                 read, modify, message.room,
                 Formatter.formatHelpMessage(),
@@ -88,6 +111,15 @@ export class MentionHandler implements IPostMessageSent {
             return;
         }
 
+        this.logger.started('ask', {
+            event: 'request.started',
+            requestId,
+            roomId: message.room.id,
+            userId: message.sender.id,
+            threadId: message.threadId,
+            details: { questionLength: question.length },
+        });
+
         // 3. Instant feedback placeholder in channel/thread
         const placeholderId = await sendPlaceholderMessage(
             read, modify, message.room,
@@ -96,7 +128,7 @@ export class MentionHandler implements IPostMessageSent {
         );
 
         try {
-            const client = new BackendClient(http, read);
+            const client = new BackendClient(http, read, this.logger);
             const sessionStore = new SessionStore(read, persistence);
 
             const settings = read.getEnvironmentReader().getSettings();
@@ -112,11 +144,10 @@ export class MentionHandler implements IPostMessageSent {
             }
 
             const history = await sessionStore.getHistory(message.sender.id, message.room.id, message.threadId, maxHistory);
-            const requestId = `mention-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
             const callbackUrl = await buildCallbackUrl(read);
 
             // 4. Enqueue async job to backend — results return via CallbackEndpoint
-            await client.askAsync(
+            const response = await client.askAsync(
                 question,
                 message.sender.id,
                 message.room.id,
@@ -127,9 +158,31 @@ export class MentionHandler implements IPostMessageSent {
                 workspaceId,
                 callbackUrl,
             );
+
+            this.logger.accepted('ask', {
+                event: 'request.accepted',
+                requestId,
+                jobId: response.job_id,
+                durationMs: Date.now() - startTime,
+                roomId: message.room.id,
+                userId: message.sender.id,
+                threadId: message.threadId,
+                details: { placeholderId, status: response.status },
+            });
         } catch (error: unknown) {
-            // 5. Fallback error handling
+            const durationMs = Date.now() - startTime;
             const errMsg = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+
+            this.logger.failed('ask', error, {
+                event: 'request.failed',
+                requestId,
+                durationMs,
+                roomId: message.room.id,
+                userId: message.sender.id,
+                threadId: message.threadId,
+                errorMessage: errMsg,
+            });
+
             if (placeholderId) {
                 try {
                     await updateMessage(placeholderId, read, modify, errMsg, undefined);
@@ -153,14 +206,28 @@ export class MentionHandler implements IPostMessageSent {
         persistence: IPersistence,
         modify: IModify,
     ): Promise<void> {
+        const startTime = Date.now();
+        const requestId = createRequestId('mentioncmd');
+
+        this.logger.started('mention_command', {
+            event: 'mention.command.started',
+            requestId,
+            roomId: message.room.id,
+            userId: message.sender.id,
+            threadId: message.threadId,
+            details: { command },
+        });
+
         switch (command) {
             case BOT_SUB_COMMANDS.START: {
                 await sendMessage(read, modify, message.room, Formatter.formatWelcomeMessage(), undefined, message.threadId);
+                this.logger.completed('mention_command', { event: 'mention.command.completed', requestId, durationMs: Date.now() - startTime });
                 break;
             }
 
             case BOT_SUB_COMMANDS.HELP: {
                 await sendMessage(read, modify, message.room, Formatter.formatHelpMessage(), undefined, message.threadId);
+                this.logger.completed('mention_command', { event: 'mention.command.completed', requestId, durationMs: Date.now() - startTime });
                 break;
             }
 
@@ -173,12 +240,13 @@ export class MentionHandler implements IPostMessageSent {
                 } else {
                     await sendMessage(read, modify, message.room, ERRORS.EMPTY_HISTORY, undefined, message.threadId);
                 }
+                this.logger.completed('mention_command', { event: 'mention.command.completed', requestId, durationMs: Date.now() - startTime, details: { hadHistory: hasHistory } });
                 break;
             }
 
             case BOT_SUB_COMMANDS.STATS: {
                 try {
-                    const client = new BackendClient(http, read);
+                    const client = new BackendClient(http, read, this.logger);
                     const settings = read.getEnvironmentReader().getSettings();
                     let workspaceId = 'default';
                     try {
@@ -189,10 +257,12 @@ export class MentionHandler implements IPostMessageSent {
                     } catch {
                         // Default workspace
                     }
-                    const documents = await client.listDocuments(workspaceId, message.room.id, message.threadId);
+                    const documents = await client.listDocuments(workspaceId, message.room.id, message.threadId, requestId);
                     await sendMessage(read, modify, message.room, Formatter.formatStats(documents), undefined, message.threadId);
+                    this.logger.completed('mention_command', { event: 'mention.command.completed', requestId, durationMs: Date.now() - startTime });
                 } catch (error: unknown) {
                     const errMsg = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+                    this.logger.failed('mention_command', error, { event: 'mention.command.failed', requestId, errorMessage: errMsg });
                     await sendMessage(read, modify, message.room, errMsg, undefined, message.threadId);
                 }
                 break;

@@ -1,5 +1,6 @@
 import {
     IHttp,
+    ILogger,
     IModify,
     IPersistence,
     IRead,
@@ -14,6 +15,8 @@ import { Formatter } from '../utils/Formatter';
 import { sendMessage, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
 import { ERRORS } from '../constants/Errors';
 import { COMMANDS } from '../constants/Commands';
+import { Logger } from '../utils/Logger';
+import { createRequestId } from '../utils/RequestId';
 
 const SUPPORTED_LANGS: Record<string, string> = {
     vi: 'Vietnamese',
@@ -35,6 +38,16 @@ export class TranslateCommand implements ISlashCommand {
     public i18nDescription = 'Translate text to another language';
     public providesPreview = false;
 
+    private logger: Logger;
+
+    constructor(logger?: ILogger | Logger | null) {
+        if (logger instanceof Logger) {
+            this.logger = logger.child('TranslateCommand');
+        } else {
+            this.logger = new Logger(logger, 'TranslateCommand');
+        }
+    }
+
     public async executor(
         context: SlashCommandContext,
         read: IRead,
@@ -42,11 +55,21 @@ export class TranslateCommand implements ISlashCommand {
         http: IHttp,
         _persis: IPersistence,
     ): Promise<void> {
+        const startTime = Date.now();
         const args = context.getArguments();
         const room = context.getRoom();
+        const sender = context.getSender();
         const threadId = context.getThreadId();
+        const requestId = createRequestId('trans');
 
         if (args.length === 0) {
+            this.logger.rejected('translate', 'Missing arguments in /translate command', {
+                event: 'translate.rejected',
+                requestId,
+                roomId: room.id,
+                userId: sender.id,
+                threadId,
+            });
             await this.sendUsage(read, modify, room, threadId);
             return;
         }
@@ -68,9 +91,25 @@ export class TranslateCommand implements ISlashCommand {
         }
 
         if (!text) {
+            this.logger.rejected('translate', 'Empty text in /translate command', {
+                event: 'translate.rejected',
+                requestId,
+                roomId: room.id,
+                userId: sender.id,
+                threadId,
+            });
             await this.sendUsage(read, modify, room, threadId);
             return;
         }
+
+        this.logger.started('translate', {
+            event: 'translate.started',
+            requestId,
+            roomId: room.id,
+            userId: sender.id,
+            threadId,
+            details: { targetLang, textLength: text.length },
+        });
 
         // 2. Instant typing/placeholder message
         const placeholderId = await sendPlaceholderMessage(
@@ -83,8 +122,8 @@ export class TranslateCommand implements ISlashCommand {
 
         try {
             // 3. Call backend translation endpoint
-            const client = new BackendClient(http, read);
-            const translation = await client.translate(text, targetLang);
+            const client = new BackendClient(http, read, this.logger);
+            const translation = await client.translate(text, targetLang, requestId);
 
             const langName = SUPPORTED_LANGS[targetLang] || targetLang;
             const answer = `**${langName}:**\n\n${translation}`;
@@ -95,9 +134,30 @@ export class TranslateCommand implements ISlashCommand {
             } else {
                 await sendMessage(read, modify, room, answer, undefined, threadId);
             }
+
+            this.logger.completed('translate', {
+                event: 'translate.completed',
+                requestId,
+                durationMs: Date.now() - startTime,
+                roomId: room.id,
+                userId: sender.id,
+                threadId,
+                details: { targetLang },
+            });
         } catch (error: unknown) {
-            // 5. Safe error handling with editor validation and fallback
+            const durationMs = Date.now() - startTime;
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
+
+            this.logger.failed('translate', error, {
+                event: 'translate.failed',
+                requestId,
+                durationMs,
+                roomId: room.id,
+                userId: sender.id,
+                threadId,
+                errorMessage: message,
+            });
+
             if (placeholderId) {
                 try {
                     await updateMessage(placeholderId, read, modify, message);
@@ -131,4 +191,3 @@ export class TranslateCommand implements ISlashCommand {
         await sendMessage(read, modify, room, usage, undefined, threadId);
     }
 }
-
