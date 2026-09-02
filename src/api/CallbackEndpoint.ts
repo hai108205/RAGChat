@@ -54,28 +54,51 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
         persis: IPersistence,
     ): Promise<IApiResponse> {
         const logger = new Logger(this.app.getLogger(), 'CallbackEndpoint');
-        const body = request.content as Record<string, unknown>;
+        const body = (request.content || {}) as Record<string, unknown>;
+
+        const bodyData = (body.data || {}) as Record<string, unknown>;
+        const event = (body.event as string | undefined) || (bodyData.event as string | undefined);
+        const userId = (body.user_id as string | undefined) || (bodyData.user_id as string | undefined);
+        const roomId = (body.room_id as string | undefined) || (bodyData.room_id as string | undefined);
+        const message = (body.message as string | undefined) || (bodyData.message as string | undefined);
+        const requestId = (body.request_id as string | undefined) || (body.requestId as string | undefined) || (bodyData.request_id as string | undefined);
+        const jobId = (body.job_id as string | undefined) || (body.jobId as string | undefined) || (bodyData.job_id as string | undefined);
 
         // 1. Authentication check:
         // Validate the shared integration token (or legacy api-key) if configured.
         if (!(await this.authorize(request, read))) {
-            logger.warn('Rejected unauthenticated callback from backend');
+            logger.rejected('callback', 'Unauthorized callback request', {
+                event: 'callback.rejected',
+                statusCode: 401,
+                requestId,
+                roomId,
+                userId,
+            });
             return {
                 status: 401,
                 content: { error: 'Unauthorized' },
             };
         }
 
-        logger.info('Received callback event', { event: body.event, room_id: body.room_id });
-
-        const event = body.event as string | undefined;
-        const userId = body.user_id as string | undefined;
-        const roomId = body.room_id as string | undefined;
-        const message = body.message as string | undefined;
-        const requestId = body.request_id as string | undefined;
+        logger.debug('Received callback event', {
+            event: 'callback.received',
+            operation: 'callback',
+            phase: 'in_progress',
+            requestId,
+            jobId,
+            roomId,
+            userId,
+            details: { callbackEvent: event },
+        });
 
         // 2. Validate mandatory envelope fields
         if (!event || !userId || !roomId) {
+            logger.rejected('callback', 'Missing required fields: event, user_id, room_id', {
+                event: 'callback.rejected',
+                statusCode: 400,
+                requestId,
+                details: { hasEvent: Boolean(event), hasUserId: Boolean(userId), hasRoomId: Boolean(roomId) },
+            });
             return {
                 status: 400,
                 content: { error: 'Missing required fields: event, user_id, room_id' },
@@ -85,7 +108,13 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
         // 3. Idempotency guard:
         // Prevents processing the same callback twice in case of network retries.
         if (requestId && processedRequests.has(requestId)) {
-            logger.info('Duplicate callback ignored', { requestId });
+            logger.duplicate('callback', {
+                event: 'callback.duplicate',
+                requestId,
+                jobId,
+                roomId,
+                userId,
+            });
             return {
                 status: 200,
                 content: { status: 'ok', detail: 'duplicate ignored' },
@@ -97,6 +126,14 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
             const room = await read.getRoomReader().getById(roomId);
 
             if (!user || !room) {
+                logger.failed('callback', new Error('User or room not found'), {
+                    event: 'callback.failed',
+                    statusCode: 404,
+                    requestId,
+                    jobId,
+                    roomId,
+                    userId,
+                });
                 return {
                     status: 404,
                     content: { error: 'User or room not found' },
@@ -135,8 +172,6 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                         : undefined;
 
                     // Persist heavy fields (rawMarkdown, sources, query) so button values stay small.
-                    // Buttons only carry `{ action, messageId, ... }`; the interaction handler
-                    // looks up the full payload from App Persistence.
                     if (placeholderId) {
                         try {
                             await saveMessageActionPayload(persis, {
@@ -148,8 +183,14 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                                 sourcesCount: sources.length,
                                 createdAt: Date.now(),
                             });
-                        } catch (persistErr) {
-                            logger.warn('Failed to persist message action payload', persistErr);
+                        } catch (persistErr: unknown) {
+                            const err = persistErr instanceof Error ? persistErr : new Error(String(persistErr));
+                            logger.warn('Failed to persist message action payload', {
+                                event: 'persistence.failed',
+                                operation: 'saveMessageActionPayload',
+                                requestId,
+                                errorMessage: err.message,
+                            });
                         }
                     }
 
@@ -167,6 +208,12 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                         try {
                             await updateMessage(placeholderId, read, modify, answer, attachment, blockBuilder);
                         } catch {
+                            logger.warn('Placeholder update failed, falling back to new message', {
+                                event: 'ui.fallback',
+                                operation: 'updateMessage',
+                                requestId,
+                                roomId,
+                            });
                             await sendMessage(read, modify, room, answer, attachment, threadId);
                         }
                     } else {
@@ -182,24 +229,58 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                             { role: 'assistant', content: answer, timestamp: Date.now() },
                         ], maxHistory);
                     }
+
+                    logger.completed('ask', {
+                        event: 'callback.completed',
+                        operation: 'ask',
+                        phase: 'complete',
+                        outcome: 'success',
+                        requestId,
+                        jobId,
+                        roomId,
+                        userId,
+                        threadId,
+                        details: { sourcesCount: sources.length, hasPlaceholder: Boolean(placeholderId) },
+                    });
                     break;
                 }
 
                 case 'chat_failed': {
-                    const placeholderId = body.placeholder_id as string | undefined;
-                    const threadId = body.thread_id as string | undefined;
-                    const error = asNonEmptyString(body.error, 'Không thể hoàn thành câu trả lời.');
+                    const placeholderId = (body.placeholder_id as string | undefined) || (bodyData.placeholder_id as string | undefined);
+                    const threadId = (body.thread_id as string | undefined) || (bodyData.thread_id as string | undefined);
+                    const error = asNonEmptyString(body.error || bodyData.error, 'Không thể hoàn thành câu trả lời.');
+                    const errorCode = asNonEmptyString(body.error_code || bodyData.error_code || bodyData.errorCode, 'CHAT_FAILED');
                     const errorMsg = `❌ **Lỗi phản hồi:** ${error}`;
 
                     if (placeholderId) {
                         try {
                             await updateMessage(placeholderId, read, modify, errorMsg, undefined);
                         } catch {
+                            logger.warn('Placeholder update failed, falling back to new message', {
+                                event: 'ui.fallback',
+                                operation: 'updateMessage',
+                                requestId,
+                                roomId,
+                            });
                             await sendMessage(read, modify, room, errorMsg, undefined, threadId);
                         }
                     } else {
                         await sendMessage(read, modify, room, errorMsg, undefined, threadId);
                     }
+
+                    logger.failed('ask', new Error(error), {
+                        event: 'callback.failed',
+                        operation: 'ask',
+                        phase: 'fail',
+                        outcome: 'failure',
+                        requestId,
+                        jobId,
+                        roomId,
+                        userId,
+                        threadId,
+                        errorCode,
+                        errorMessage: error,
+                    });
                     break;
                 }
 
@@ -212,6 +293,18 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                         undefined,
                         body.thread_id as string | undefined,
                     );
+
+                    logger.completed('upload', {
+                        event: 'index.completed',
+                        operation: 'upload',
+                        phase: 'complete',
+                        outcome: 'success',
+                        requestId,
+                        jobId,
+                        roomId,
+                        userId,
+                        details: { filename: docName, chunksCount },
+                    });
                     break;
                 }
 
@@ -224,6 +317,19 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                         undefined,
                         body.thread_id as string | undefined,
                     );
+
+                    logger.failed('upload', new Error(error), {
+                        event: 'index.failed',
+                        operation: 'upload',
+                        phase: 'fail',
+                        outcome: 'failure',
+                        requestId,
+                        jobId,
+                        roomId,
+                        userId,
+                        errorMessage: error,
+                        details: { filename: docName },
+                    });
                     break;
                 }
 
@@ -231,7 +337,11 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
                     if (message) {
                         await sendMessage(read, modify, room, message);
                     } else {
-                        logger.warn(`Unknown callback event: ${event}`);
+                        logger.warn(`Unknown callback event: ${event}`, {
+                            event: 'callback.unknown',
+                            requestId,
+                            details: { eventName: event },
+                        });
                     }
                 }
             }
@@ -253,7 +363,14 @@ export class CallbackEndpoint extends ApiEndpoint implements IApiEndpoint {
             };
         } catch (error: unknown) {
             const errMsg = error instanceof Error ? error.message : 'Callback processing failed';
-            logger.error('Callback processing exception', errMsg);
+            logger.failed('callback', error, {
+                event: 'callback.failed',
+                statusCode: 500,
+                requestId,
+                jobId,
+                roomId,
+                userId,
+            });
             return {
                 status: 500,
                 content: { error: errMsg },

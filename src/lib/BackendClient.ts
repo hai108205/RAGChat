@@ -1,11 +1,14 @@
 import {
     IHttp,
     IHttpResponse,
+    ILogger,
     IRead,
 } from '@rocket.chat/apps-engine/definition/accessors';
 import { ERRORS } from '../constants/Errors';
 import { ChatMessage } from '../persistence/sessionStore';
 import { CitationSource } from '../utils/Formatter';
+import { Logger } from '../utils/Logger';
+import { createRequestId } from '../utils/RequestId';
 import { Validator } from '../utils/Validator';
 import {
     AsyncMessagePayload,
@@ -56,13 +59,22 @@ export { SearchResult, SourceDocument, SourcesListData, FeedbackPayload } from '
  * - Integration stats mapped to `/api/v1/integrations/rocketchat/stats`.
  * - Base64 document indexing mapped to `/api/v1/integrations/rocketchat/sources/base64`.
  * - Utility text operations (summarize, explain, translate, search) mapped to `/api/v1/integrations/rocketchat/utilities/completion`.
- * - Response envelope unwrapping and detailed error extraction.
+ * - Centralized observability and structured logging for all outgoing HTTP transactions.
  */
 export class BackendClient {
+    private logger: Logger;
+
     constructor(
         private http: IHttp,
         private read: IRead,
-    ) {}
+        logger?: ILogger | Logger | null,
+    ) {
+        if (logger instanceof Logger) {
+            this.logger = logger.child('BackendClient');
+        } else {
+            this.logger = new Logger(logger, 'BackendClient');
+        }
+    }
 
     /**
      * Enqueues an asynchronous RAG question answering job to the Node.js backend.
@@ -82,7 +94,7 @@ export class BackendClient {
         workspaceId?: string,
         callbackUrl?: string,
     ): Promise<{ status: string; job_id: string; request_id: string }> {
-        const reqId = requestId || `ask-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const reqId = requestId || createRequestId('ask');
 
         const payload: AsyncMessagePayload = {
             workspaceId: workspaceId || 'default',
@@ -97,14 +109,16 @@ export class BackendClient {
         };
 
         try {
-            const response = await this.post('/api/v1/integrations/rocketchat/messages/async', payload);
+            const response = await this.post('/api/v1/integrations/rocketchat/messages/async', payload, HTTP_TIMEOUT.DEFAULT, reqId);
             const data = this.extractData<AsyncMessageResponseData>(response);
 
-            return {
+            const result = {
                 status: data?.status || 'accepted',
                 job_id: data?.jobId || data?.job_id || `job-${reqId}`,
                 request_id: data?.requestId || data?.request_id || reqId,
             };
+
+            return result;
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             throw new Error(message);
@@ -118,6 +132,7 @@ export class BackendClient {
         workspaceId?: string,
         roomId?: string,
         threadId?: string,
+        requestId?: string,
     ): Promise<StatsDocument[]> {
         try {
             const queryParams: string[] = [];
@@ -126,7 +141,7 @@ export class BackendClient {
             if (threadId) queryParams.push(`threadId=${encodeURIComponent(threadId)}`);
 
             const queryString = queryParams.length ? `?${queryParams.join('&')}` : '';
-            const response = await this.get(`/api/v1/integrations/rocketchat/stats${queryString}`);
+            const response = await this.get(`/api/v1/integrations/rocketchat/stats${queryString}`, HTTP_TIMEOUT.DEFAULT, requestId);
             const data = this.extractData<IntegrationStatsData>(response);
 
             return data?.documents || [];
@@ -143,6 +158,7 @@ export class BackendClient {
         workspaceId?: string,
         roomId?: string,
         threadId?: string,
+        requestId?: string,
     ): Promise<SourceDocument[]> {
         try {
             const queryParams: string[] = [];
@@ -151,7 +167,7 @@ export class BackendClient {
             if (threadId) queryParams.push(`threadId=${encodeURIComponent(threadId)}`);
 
             const queryString = queryParams.length ? `?${queryParams.join('&')}` : '';
-            const response = await this.get(`/api/v1/integrations/rocketchat/sources${queryString}`);
+            const response = await this.get(`/api/v1/integrations/rocketchat/sources${queryString}`, HTTP_TIMEOUT.DEFAULT, requestId);
             const data = this.extractData<SourcesListData>(response);
 
             return data?.sources || [];
@@ -169,6 +185,7 @@ export class BackendClient {
         workspaceId?: string,
         roomId?: string,
         mode: 'room' | 'global' = 'room',
+        requestId?: string,
     ): Promise<boolean> {
         try {
             const queryParams: string[] = [];
@@ -177,7 +194,11 @@ export class BackendClient {
             if (mode) queryParams.push(`mode=${encodeURIComponent(mode)}`);
 
             const queryString = queryParams.length ? `?${queryParams.join('&')}` : '';
-            await this.delete(`/api/v1/integrations/rocketchat/sources/${encodeURIComponent(sourceId)}${queryString}`);
+            await this.delete(
+                `/api/v1/integrations/rocketchat/sources/${encodeURIComponent(sourceId)}${queryString}`,
+                HTTP_TIMEOUT.DEFAULT,
+                requestId,
+            );
             return true;
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
@@ -190,9 +211,10 @@ export class BackendClient {
      */
     public async submitFeedback(
         payload: FeedbackPayload,
+        requestId?: string,
     ): Promise<boolean> {
         try {
-            const response = await this.post('/api/v1/integrations/rocketchat/feedback', payload);
+            const response = await this.post('/api/v1/integrations/rocketchat/feedback', payload, HTTP_TIMEOUT.DEFAULT, requestId);
             this.assertSuccess(response);
             return true;
         } catch (error: unknown) {
@@ -207,15 +229,16 @@ export class BackendClient {
     public async uploadBase64(
         payload: Base64UploadPayload,
     ): Promise<Base64UploadResponseData> {
+        const reqId = payload.requestId || createRequestId('upload');
         try {
-            const response = await this.post('/api/v1/integrations/rocketchat/sources/base64', payload);
+            const response = await this.post('/api/v1/integrations/rocketchat/sources/base64', payload, HTTP_TIMEOUT.DEFAULT, reqId);
             const data = this.extractData<Base64UploadResponseData>(response);
 
             return {
                 status: data?.status || 'accepted',
                 sourceId: data?.sourceId,
                 jobId: data?.jobId,
-                requestId: data?.requestId || payload.requestId,
+                requestId: data?.requestId || reqId,
             };
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
@@ -227,12 +250,13 @@ export class BackendClient {
      * Summarizes text using the utility endpoint `/api/v1/integrations/rocketchat/utilities/completion`.
      * Uses a short timeout to fit within the Apps Engine ~10s handler budget.
      */
-    public async summarize(text: string): Promise<string> {
+    public async summarize(text: string, requestId?: string): Promise<string> {
         try {
             const response = await this.post(
                 '/api/v1/integrations/rocketchat/utilities/completion',
                 { operation: 'summarize', text },
                 HTTP_TIMEOUT.UTILITY,
+                requestId,
             );
             const data = this.extractData<UtilityCompletionData>(response);
             return data?.result || data?.summary || 'No summary generated.';
@@ -246,12 +270,13 @@ export class BackendClient {
      * Explains a concept using the utility endpoint `/api/v1/integrations/rocketchat/utilities/completion`.
      * Uses a short timeout to fit within the Apps Engine ~10s handler budget.
      */
-    public async explain(concept: string): Promise<string> {
+    public async explain(concept: string, requestId?: string): Promise<string> {
         try {
             const response = await this.post(
                 '/api/v1/integrations/rocketchat/utilities/completion',
                 { operation: 'explain', concept },
                 HTTP_TIMEOUT.UTILITY,
+                requestId,
             );
             const data = this.extractData<UtilityCompletionData>(response);
             return data?.result || data?.explanation || 'No explanation generated.';
@@ -265,12 +290,13 @@ export class BackendClient {
      * Translates text using the utility endpoint `/api/v1/integrations/rocketchat/utilities/completion`.
      * Uses a short timeout to fit within the Apps Engine ~10s handler budget.
      */
-    public async translate(text: string, targetLang: string = 'vi'): Promise<string> {
+    public async translate(text: string, targetLang: string = 'vi', requestId?: string): Promise<string> {
         try {
             const response = await this.post(
                 '/api/v1/integrations/rocketchat/utilities/completion',
                 { operation: 'translate', text, targetLang },
                 HTTP_TIMEOUT.UTILITY,
+                requestId,
             );
             const data = this.extractData<UtilityCompletionData>(response);
             return data?.result || data?.translation || 'No translation generated.';
@@ -289,12 +315,14 @@ export class BackendClient {
         topK: number = 5,
         _userId?: string,
         roomId?: string,
+        requestId?: string,
     ): Promise<SearchResult[]> {
         try {
             const response = await this.post(
                 '/api/v1/integrations/rocketchat/utilities/completion',
                 { operation: 'search', query, topK, roomId },
                 HTTP_TIMEOUT.SEARCH,
+                requestId,
             );
             const data = this.extractData<UtilityCompletionData>(response);
             return data?.results || [];
@@ -309,17 +337,23 @@ export class BackendClient {
      */
     public async ask(
         query: string,
-        userId: string,
+        _userId: string,
         roomId: string,
         _history?: ChatMessage[],
+        requestId?: string,
     ): Promise<BackendAskResponse> {
+        const reqId = requestId || createRequestId('sync');
         try {
-            const reqId = `sync-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-            const response = await this.post('/api/v1/integrations/rocketchat/utilities/completion', {
-                operation: 'explain',
-                concept: query,
-                roomId,
-            });
+            const response = await this.post(
+                '/api/v1/integrations/rocketchat/utilities/completion',
+                {
+                    operation: 'explain',
+                    concept: query,
+                    roomId,
+                },
+                HTTP_TIMEOUT.UTILITY,
+                reqId,
+            );
             const data = this.extractData<UtilityCompletionData>(response);
 
             return {
@@ -398,58 +432,146 @@ export class BackendClient {
     }
 
     /**
-     * Executes HTTP POST request to backend with headers and timeout.
-     * Defaults to 60s; interactive callers (commands, action handlers) should
-     * pass a tighter budget via `HTTP_TIMEOUT.UTILITY` / `HTTP_TIMEOUT.SEARCH`.
+     * Executes HTTP POST request to backend with headers, timeout, and structured logging.
      */
     public async post(
         path: string,
         data: unknown,
         timeoutMs: number = HTTP_TIMEOUT.DEFAULT,
+        requestId?: string,
     ): Promise<IHttpResponse> {
-        const url = `${await this.getBackendUrl()}${path}`;
-        const headers = await this.buildHeaders();
-
-        const response = await this.http.post(url, {
-            data,
-            headers,
-            timeout: timeoutMs,
-        });
-
-        this.assertSuccess(response);
-        return response;
+        return this.executeHttp('POST', path, data, timeoutMs, requestId);
     }
 
     /**
-     * Executes HTTP GET request to backend with headers and timeout.
+     * Executes HTTP GET request to backend with headers, timeout, and structured logging.
      */
-    public async get(path: string): Promise<IHttpResponse> {
-        const url = `${await this.getBackendUrl()}${path}`;
-        const headers = await this.buildHeaders();
-
-        const response = await this.http.get(url, {
-            headers,
-            timeout: 60000,
-        });
-
-        this.assertSuccess(response);
-        return response;
+    public async get(
+        path: string,
+        timeoutMs: number = HTTP_TIMEOUT.DEFAULT,
+        requestId?: string,
+    ): Promise<IHttpResponse> {
+        return this.executeHttp('GET', path, undefined, timeoutMs, requestId);
     }
 
     /**
-     * Executes HTTP DELETE request to backend with headers and timeout.
+     * Executes HTTP DELETE request to backend with headers, timeout, and structured logging.
      */
-    public async delete(path: string): Promise<IHttpResponse> {
-        const url = `${await this.getBackendUrl()}${path}`;
-        const headers = await this.buildHeaders();
+    public async delete(
+        path: string,
+        timeoutMs: number = HTTP_TIMEOUT.DEFAULT,
+        requestId?: string,
+    ): Promise<IHttpResponse> {
+        return this.executeHttp('DELETE', path, undefined, timeoutMs, requestId);
+    }
 
-        const response = await this.http.del(url, {
-            headers,
-            timeout: 60000,
+    /**
+     * Centralized execution pipeline for all HTTP communication with RAG backend.
+     * Captures request duration, status codes, sanitization, and structured logs.
+     */
+    private async executeHttp(
+        method: 'GET' | 'POST' | 'DELETE',
+        path: string,
+        data?: unknown,
+        timeoutMs: number = HTTP_TIMEOUT.DEFAULT,
+        requestId?: string,
+    ): Promise<IHttpResponse> {
+        const startTime = Date.now();
+        const sanitizedPath = this.sanitizeRoute(path);
+
+        this.logger.debug('backend.request.started', {
+            event: 'backend.request.started',
+            operation: `http_${method.toLowerCase()}` as any,
+            phase: 'start',
+            outcome: 'in_progress',
+            method,
+            path: sanitizedPath,
+            requestId,
+            details: { method, path: sanitizedPath, timeoutMs },
         });
 
-        this.assertSuccess(response);
-        return response;
+        try {
+            const baseUrl = await this.getBackendUrl();
+            const url = `${baseUrl}${path}`;
+            const headers = await this.buildHeaders();
+
+            let response: IHttpResponse;
+            switch (method) {
+                case 'POST':
+                    response = await this.http.post(url, { data, headers, timeout: timeoutMs });
+                    break;
+                case 'GET':
+                    response = await this.http.get(url, { headers, timeout: timeoutMs });
+                    break;
+                case 'DELETE':
+                    response = await this.http.del(url, { headers, timeout: timeoutMs });
+                    break;
+            }
+
+            const durationMs = Date.now() - startTime;
+            this.assertSuccess(response);
+
+            this.logger.debug('backend.request.completed', {
+                event: 'backend.request.completed',
+                operation: `http_${method.toLowerCase()}` as any,
+                phase: 'complete',
+                outcome: 'success',
+                method,
+                path: sanitizedPath,
+                statusCode: response.statusCode,
+                durationMs,
+                requestId,
+                details: { method, path: sanitizedPath },
+            });
+
+            return response;
+        } catch (error: unknown) {
+            const durationMs = Date.now() - startTime;
+            const errInfo = error instanceof Error
+                ? { message: error.message, name: error.name }
+                : { message: String(error), name: 'HttpError' };
+
+            let statusCode = 500;
+            const statusMatch = errInfo.message.match(/\((\d{3})\)/);
+            if (statusMatch) {
+                statusCode = parseInt(statusMatch[1], 10);
+            }
+
+            this.logger.error('backend.request.failed', {
+                event: 'backend.request.failed',
+                operation: `http_${method.toLowerCase()}` as any,
+                phase: 'fail',
+                outcome: 'failure',
+                method,
+                path: sanitizedPath,
+                statusCode,
+                durationMs,
+                errorCode: `HTTP_${statusCode}`,
+                errorName: errInfo.name,
+                errorMessage: Validator.sanitizeInput(errInfo.message),
+                requestId,
+                details: { method, path: sanitizedPath },
+            });
+
+            throw error;
+        }
+    }
+
+    /**
+     * Sanitizes route path by removing query param values that could leak PII or tokens.
+     */
+    private sanitizeRoute(path: string): string {
+        const queryIndex = path.indexOf('?');
+        if (queryIndex === -1) {
+            return path;
+        }
+        const basePath = path.slice(0, queryIndex);
+        const query = path.slice(queryIndex + 1);
+        const params = query.split('&').map((p) => {
+            const [k] = p.split('=');
+            return `${k}=***`;
+        });
+        return `${basePath}?${params.join('&')}`;
     }
 
     /**
@@ -509,4 +631,5 @@ export class BackendClient {
 
         return headers;
     }
+
 }
