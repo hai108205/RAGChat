@@ -129,7 +129,7 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
             });
         } else {
             systemPrompt +=
-                "Answer the user's question helpfully and concisely using Markdown formatting.";
+                "No documentation excerpts were retrieved. State that there is insufficient evidence in the provided documentation to answer the user's question. Do not answer from general knowledge. Use Markdown formatting.";
         }
 
         const messages: any[] = [{ role: "system", content: systemPrompt }];

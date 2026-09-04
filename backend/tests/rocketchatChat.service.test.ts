@@ -94,4 +94,19 @@ describe("processRocketChatChat", () => {
         expect(systemPrompt).toContain("Ignore irrelevant or conflicting excerpts");
         expect(systemPrompt).toContain("insufficient evidence");
     });
+
+    it("requires an insufficient-evidence response when scoped retrieval returns no excerpts", async () => {
+        scopedVectorSearchMock.mockResolvedValue([]);
+
+        await processRocketChatChat({
+            workspaceId: "workspace-1",
+            rocketUserId: "rocket-user-1",
+            roomId: "room-1",
+            query: "What is the unsupported policy?",
+            requestId: "request-no-evidence",
+        });
+
+        const systemPrompt = completionCreateMock.mock.calls[0][0].messages[0].content;
+        expect(systemPrompt.toLowerCase()).toContain("state that there is insufficient evidence");
+    });
 });
