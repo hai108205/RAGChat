@@ -7,13 +7,14 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import redis from "../utils/redis.js";
 import { Resend } from "resend";
+import { config } from "../config/runtime.js";
 import { createAuditEvent } from "../utils/audit.js";
 
-const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+const resend = config.integrations.resendApiKey ? new Resend(config.integrations.resendApiKey) : null;
 
 const AccessOptions: CookieOptions = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: config.environment === "production",
     sameSite: "lax",
     maxAge: 1 * 24 * 60 * 60 * 1000, // 1 day
     path: "/",
@@ -21,7 +22,7 @@ const AccessOptions: CookieOptions = {
 
 const RefreshOptions: CookieOptions = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: config.environment === "production",
     sameSite: "lax",
     maxAge: 10 * 24 * 60 * 60 * 1000, // 10 days
     path: "/",
@@ -37,8 +38,8 @@ const isPasswordCorrect = async (password: string, hashedPassword?: string | nul
 };
 
 const generateAccessToken = (user: any): string => {
-    const secret = process.env.ACCESS_TOKEN_SECRET || "";
-    const expiry = process.env.ACCESS_TOKEN_EXPIRY || "1d";
+    const secret = config.auth.accessTokenSecret;
+    const expiry = config.auth.accessTokenExpiry;
     return jwt.sign(
         {
             id: user.id,
@@ -53,8 +54,8 @@ const generateAccessToken = (user: any): string => {
 };
 
 const generateRefreshToken = (userId: string): string => {
-    const secret = process.env.REFRESH_TOKEN_SECRET || "";
-    const expiry = process.env.REFRESH_TOKEN_EXPIRY || "10d";
+    const secret = config.auth.refreshTokenSecret;
+    const expiry = config.auth.refreshTokenExpiry;
     return jwt.sign(
         {
             id: userId,
@@ -247,7 +248,7 @@ const refreshTokens = asyncHandler(async (req: Request, res: Response) => {
     if (!incomingToken) throw new ApiError(401, "No Refresh Token found");
 
     try {
-        const secret = process.env.REFRESH_TOKEN_SECRET || "";
+        const secret = config.auth.refreshTokenSecret;
         const decodedToken = jwt.verify(incomingToken, secret) as { id: string };
 
         const user = await prisma.user.findUnique({

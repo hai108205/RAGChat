@@ -318,6 +318,7 @@ describe("Rocket.Chat Integration Router", () => {
         process.env.ROCKETCHAT_INTEGRATION_TOKEN = "test-secret-token";
         process.env.ALLOW_UNAUTHENTICATED_ROCKETCHAT_DEV = "false";
         process.env.ROCKETCHAT_CALLBACK_ALLOWED_ORIGINS = "https://rocketchat.example.com,http://rocketchat:3000,http://localhost:3001";
+        delete process.env.EMBEDDING_MODEL;
         userFindFirstMock.mockReset().mockResolvedValue({ id: "user-1", username: "rc_default_unknown" });
         userCreateMock.mockReset().mockResolvedValue({ id: "user-1", username: "rc_default_unknown" });
         chatFindFirstMock.mockReset().mockResolvedValue({ id: "chat-1", chatSources: [] });

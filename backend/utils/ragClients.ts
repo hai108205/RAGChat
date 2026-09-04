@@ -1,11 +1,12 @@
 import { TreeIndex } from "treeindex";
 import { QdrantClient } from "@qdrant/js-client-rest";
 import { trackApiError, resetApiErrors } from "./apiErrorTracker.js";
+import { config } from "../config/runtime.js";
 
 function createWrappedQdrant(): QdrantClient {
     const client = new QdrantClient({
-        url: process.env.QDRANT_URL,
-        apiKey: process.env.QDRANT_API_KEY,
+        url: config.qdrant.url,
+        apiKey: config.qdrant.apiKey,
         checkCompatibility: false,
     });
 
@@ -30,8 +31,8 @@ function createWrappedQdrant(): QdrantClient {
 function createWrappedTreeIndex(): TreeIndex {
     const client = new TreeIndex({
         baseURL: "https://openrouter.ai/api/v1",
-        apiKey: process.env.TREEINDEX_API_KEY || "dummy_treeindex_api_key",
-        model: process.env.MODEL,
+        apiKey: config.llm.treeIndexApiKey || "dummy_treeindex_api_key",
+        model: config.llm.treeIndexModel,
     });
 
     return new Proxy(client, {

@@ -8,6 +8,7 @@ import {
     splitDocumentationContent,
 } from "../utils/ragUtilities.js";
 import { deleteQdrantCollectionSafe } from "../utils/qdrantCleanup.js";
+import { config } from "../config/runtime.js";
 import {
     getOrCreateRocketChatUser,
     getOrCreateRocketChatChat,
@@ -113,7 +114,7 @@ export async function ingestBase64Document(
 
     // 6. Allocate Qdrant collection
     const collectionName = `rc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    const selectedEmbeddingModel = process.env.EMBEDDING_MODEL || embeddingModel || "openai/text-embedding-3-small";
+    const selectedEmbeddingModel = embeddingModel || config.llm.embeddingModel;
     const dimensions = getEmbeddingDimensionsForModel(selectedEmbeddingModel);
 
     await qdrant.createCollection(collectionName, {

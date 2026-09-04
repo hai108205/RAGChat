@@ -3,6 +3,7 @@ import prisma from "../utils/prismaClient.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { ApiError } from "../utils/ApiError.js";
+import { config } from "../config/runtime.js";
 import jwt from "jsonwebtoken";
 import { createAuditEvent } from "../utils/audit.js";
 import {
@@ -376,7 +377,7 @@ const impersonate = asyncHandler(async (req: Request, res: Response) => {
         throw new ApiError(404, "User not found");
     }
 
-    const secret = process.env.ACCESS_TOKEN_SECRET || "";
+    const secret = config.auth.accessTokenSecret;
     const impersonationToken = jwt.sign(
         {
             id: targetUser.id,

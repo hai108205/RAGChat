@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import { ApiError } from "../utils/ApiError.js";
 import logger from "../utils/logger.js";
+import { config } from "../config/runtime.js";
 
 /**
  * Timing-safe string comparison to prevent timing attacks.
@@ -19,9 +20,9 @@ function timingSafeCompare(a: string, b: string): boolean {
  * Fails closed in production and by default in non-production unless explicitly allowed.
  */
 export const verifyIntegrationToken = (req: Request, res: Response, next: NextFunction): void => {
-    const configuredToken = process.env.ROCKETCHAT_INTEGRATION_TOKEN;
-    const isProd = process.env.NODE_ENV === "production";
-    const allowDev = process.env.ALLOW_UNAUTHENTICATED_ROCKETCHAT_DEV === "true";
+    const configuredToken = config.rocketchat.integrationToken;
+    const isProd = config.environment === "production";
+    const allowDev = config.rocketchat.allowUnauthenticatedDev;
 
     if (!configuredToken) {
         if (!isProd && allowDev) {
@@ -74,4 +75,3 @@ export const verifyIntegrationToken = (req: Request, res: Response, next: NextFu
 
     next();
 };
-

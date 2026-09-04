@@ -9,6 +9,7 @@ import {
 } from "../utils/rocketchatIdentity.js";
 import { scopedVectorSearch } from "./scopedVectorSearch.js";
 import { sendRocketChatCallback } from "../controllers/rocketchatIntegration.controller.js";
+import { config } from "../config/runtime.js";
 
 export interface RocketChatChatPayload {
     workspaceId?: string;
@@ -28,9 +29,9 @@ export interface RocketChatChatPayload {
 
 function getLLMClient(): OpenAI {
     if (
-        process.env.NODE_ENV === "test" &&
-        (!process.env.OPENROUTER_LLM_API_KEY ||
-            process.env.OPENROUTER_LLM_API_KEY.startsWith("test-"))
+        config.environment === "test" &&
+        (!config.llm.openRouterLlmApiKey ||
+            config.llm.openRouterLlmApiKey.startsWith("test-"))
     ) {
         return {
             chat: {
@@ -58,12 +59,11 @@ function getLLMClient(): OpenAI {
     }
 
     const apiKey =
-        process.env.OPENAI_API_KEY ||
-        process.env.OPENROUTER_LLM_API_KEY ||
+        config.llm.openAiApiKey ||
+        config.llm.openRouterLlmApiKey ||
         "dummy_key_for_test";
     const baseURL =
-        process.env.OPENAI_BASE_URL ||
-        process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
+        config.llm.openAiBaseUrl || config.llm.openRouterBaseUrl;
 
     return new OpenAI({
         baseURL,
@@ -90,7 +90,7 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
         requestId,
     } = payload;
 
-    const defaultModel = model || process.env.DEFAULT_LLM_MODEL || "openai/gpt-4o-mini";
+    const defaultModel = model || config.llm.defaultModel;
     const temp = typeof temperature === "number" ? temperature : 0.7;
 
     try {

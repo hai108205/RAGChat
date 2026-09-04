@@ -40,6 +40,7 @@ import { getRocketChatStats } from "../services/rocketchatStats.service.js";
 import { deleteSourceWithCleanup } from "../services/qdrantCleanupOutbox.service.js";
 import { enqueueRocketChatJob } from "../utils/rocketchatQueue.js";
 import { submitRocketChatFeedback } from "../services/rocketchatFeedback.service.js";
+import { config } from "../config/runtime.js";
 
 
 // In-memory LRU idempotency cache for fast deduplication
@@ -68,7 +69,7 @@ export interface SendRocketChatCallbackOptions {
  */
 export function getTrustedCallbackOrigins(): Set<string> {
     const trusted = new Set<string>();
-    const originsStr = process.env.ROCKETCHAT_CALLBACK_ALLOWED_ORIGINS;
+    const originsStr = config.rocketchat.trustedCallbackOrigins.join(",");
     if (originsStr) {
         originsStr.split(",").forEach((item) => {
             const trimmed = item.trim();
@@ -81,19 +82,6 @@ export function getTrustedCallbackOrigins(): Set<string> {
                 }
             }
         });
-    }
-
-    const baseUrlStr = process.env.ROCKETCHAT_CALLBACK_BASE_URL;
-    if (baseUrlStr) {
-        const trimmed = baseUrlStr.trim();
-        if (trimmed) {
-            try {
-                const parsed = new URL(trimmed);
-                trusted.add(parsed.origin.toLowerCase());
-            } catch {
-                trusted.add(trimmed.toLowerCase());
-            }
-        }
     }
 
     return trusted;
@@ -133,8 +121,8 @@ export function validateCallbackUrl(callbackUrl: string): { valid: boolean; reas
         return { valid: false, reason: "Callback URL must not contain URL fragments/hashes." };
     }
 
-    const isProd = process.env.NODE_ENV === "production";
-    const allowDev = process.env.ALLOW_UNAUTHENTICATED_ROCKETCHAT_DEV === "true";
+    const isProd = config.environment === "production";
+    const allowDev = config.rocketchat.allowUnauthenticatedDev;
     const trustedOrigins = getTrustedCallbackOrigins();
     const origin = parsed.origin.toLowerCase();
 
@@ -205,7 +193,7 @@ export async function sendRocketChatCallback(
 
     const maxRetries = options.maxRetries ?? 2;
     const timeoutMs = options.timeoutMs ?? 10000;
-    const token = process.env.ROCKETCHAT_INTEGRATION_TOKEN;
+    const token = config.rocketchat.integrationToken;
 
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
@@ -276,7 +264,7 @@ export async function sendRocketChatCallback(
 }
 
 function getLLMClient(): OpenAI {
-    if (process.env.NODE_ENV === "test" && (!process.env.OPENROUTER_LLM_API_KEY || process.env.OPENROUTER_LLM_API_KEY.startsWith("test-"))) {
+    if (config.environment === "test" && (!config.llm.openRouterLlmApiKey || config.llm.openRouterLlmApiKey.startsWith("test-"))) {
         return {
             chat: {
                 completions: {
@@ -302,11 +290,11 @@ function getLLMClient(): OpenAI {
     }
 
     const apiKey =
-        process.env.OPENROUTER_LLM_API_KEY ||
-        process.env.OPENAI_API_KEY ||
+        config.llm.openRouterLlmApiKey ||
+        config.llm.openAiApiKey ||
         "dummy_key_for_test";
     const baseURL =
-        process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
+        config.llm.openRouterBaseUrl;
 
     return new OpenAI({
         baseURL,
@@ -359,7 +347,7 @@ async function retrieveRelevantSources(
     const sourcesByModel = new Map<string, any[]>();
     for (const source of chat.chatSources) {
         if (!source.collectionName) continue;
-        const srcModel = source.embeddingModel || process.env.EMBEDDING_MODEL || embeddingModel || "openai/text-embedding-3-small";
+        const srcModel = source.embeddingModel || config.llm.embeddingModel || embeddingModel || "openai/text-embedding-3-small";
         if (!sourcesByModel.has(srcModel)) {
             sourcesByModel.set(srcModel, []);
         }
@@ -483,7 +471,7 @@ export const getStats = asyncHandler(async (req: Request, res: Response) => {
         roomId,
         threadId,
         mode,
-        allowGlobal: process.env.ALLOW_ROCKETCHAT_GLOBAL_MODE === "true",
+        allowGlobal: config.rocketchat.allowGlobalMode,
     });
 
     return res.status(200).json(
@@ -518,7 +506,7 @@ export const listSources = asyncHandler(async (req: Request, res: Response) => {
         roomId,
         threadId,
         mode,
-        allowGlobal: process.env.ALLOW_ROCKETCHAT_GLOBAL_MODE === "true",
+        allowGlobal: config.rocketchat.allowGlobalMode,
     });
 
     const sources = await prisma.chatSource.findMany({
@@ -598,7 +586,7 @@ export const deleteSource = asyncHandler(async (req: Request, res: Response) => 
         workspaceId,
         roomId,
         mode,
-        allowGlobal: process.env.ALLOW_ROCKETCHAT_GLOBAL_MODE === "true",
+        allowGlobal: config.rocketchat.allowGlobalMode,
         actorRocketUserId,
         canManageSources,
         requestId: req.id,
@@ -740,7 +728,7 @@ export const handleUtilityCompletion = asyncHandler(async (req: Request, res: Re
     } = req.body;
 
     const openai = getLLMClient();
-    const activeModel = model || process.env.DEFAULT_LLM_MODEL || "openai/gpt-4o-mini";
+    const activeModel = model || config.llm.defaultModel;
     const temp = typeof temperature === "number" ? temperature : 0.7;
 
     if (operation === "summarize") {

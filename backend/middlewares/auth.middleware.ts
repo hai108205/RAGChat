@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken";
 import type { Request, Response, NextFunction } from "express";
 import prisma from "../utils/prismaClient.js";
 import { ApiError } from "../utils/ApiError.js";
+import { config } from "../config/runtime.js";
 
 interface DecodedToken {
     id: string;
@@ -21,7 +22,7 @@ const verifyStrictJWT = async (req: Request, res: Response, next: NextFunction):
             throw new ApiError(401, "Unauthorised request");
         }
 
-        const secret = process.env.ACCESS_TOKEN_SECRET || "";
+        const secret = config.auth.accessTokenSecret;
         const decodedToken = jwt.verify(token, secret) as DecodedToken;
         const user = await prisma.user.findUnique({
             where: { id: decodedToken.id },
@@ -54,7 +55,7 @@ const verifyJWT = async (req: Request, res: Response, next: NextFunction): Promi
 
     if (token) {
         try {
-            const secret = process.env.ACCESS_TOKEN_SECRET || "";
+            const secret = config.auth.accessTokenSecret;
             const decodedToken = jwt.verify(token, secret) as DecodedToken;
             const user = await prisma.user.findUnique({
                 where: { id: decodedToken.id },

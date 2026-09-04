@@ -1,7 +1,6 @@
-import "dotenv/config";
 import connectDB from "./utils/connectDB.js";
 import { app } from "./app.js";
-import validateEnv from "./utils/validateEnv.js";
+import { config } from "./config/runtime.js";
 import prisma from "./utils/prismaClient.js";
 import redis from "./utils/redis.js";
 import { closeChatCreationQueue } from "./utils/queue.js";
@@ -10,9 +9,7 @@ import { stopQdrantCleanupWorker, startQdrantCleanupWorker } from "./workers/qdr
 import { startRocketChatWorker, closeRocketChatWorker } from "./workers/rocketchatIntegrationWorker.js";
 import type { Server } from "node:http";
 
-validateEnv();
-
-const PORT = process.env.PORT || 8000;
+const PORT = config.server.port;
 let server: Server;
 
 connectDB()

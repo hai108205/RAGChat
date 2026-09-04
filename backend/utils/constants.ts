@@ -25,7 +25,7 @@ export const PROVIDERS_BASE_URLS: Record<string, string> = {
     OPENROUTER: "https://openrouter.ai/api/v1",
 };
 
-export const MEM0_ENABLED: boolean = Boolean(process.env.MEM0_API_KEY);
+export const MEM0_ENABLED: boolean = Boolean(config.integrations.mem0ApiKey);
 
 export const USAGE_PRICING_VERSION = "v1";
 
@@ -130,8 +130,5 @@ export function estimateUsageCostUsd({
 }
 
 // Optional tokens limit
-const parsedDailyTokenBudget = Number(process.env.DAILY_TOKEN_BUDGET);
-export const DAILY_TOKEN_BUDGET: number | null =
-    Number.isFinite(parsedDailyTokenBudget) && parsedDailyTokenBudget > 0
-        ? parsedDailyTokenBudget
-        : null;
+export const DAILY_TOKEN_BUDGET: number | null = config.integrations.dailyTokenBudget;
+import { config } from "../config/runtime.js";

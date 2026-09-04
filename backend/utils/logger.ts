@@ -1,7 +1,8 @@
 import pino from "pino";
+import { config } from "../config/runtime.js";
 
 const logger = pino({
-    level: process.env.LOG_LEVEL || "info",
+    level: config.observability.logLevel,
     transport: {
         target: "pino/file",
         options: { destination: 1 },

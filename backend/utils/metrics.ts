@@ -3,6 +3,7 @@ import type { Request, Response, NextFunction } from "express";
 import prisma from "./prismaClient.js";
 import redis from "./redis.js";
 import { getChatCreationQueue } from "./queue.js";
+import { config } from "../config/runtime.js";
 
 // Initialize prom-client Registry
 const registry = new client.Registry();
@@ -47,7 +48,7 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
 
 // Middleware to protect internal metrics endpoint
 export const metricsAuthMiddleware = (req: Request, res: Response, next: NextFunction): void => {
-    const token = process.env.METRICS_TOKEN;
+    const token = config.observability.metricsToken;
     if (token) {
         const authHeader = req.headers["x-metrics-token"] || req.query.token;
         if (authHeader !== token) {

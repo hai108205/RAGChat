@@ -1,10 +1,10 @@
 import { Redis, type RedisOptions } from "ioredis";
 import { EventEmitter } from "events";
+import { config } from "../config/runtime.js";
 
-const redisPort = Number.parseInt(process.env.REDIS_PORT || "6379", 10);
 const redisOptions: RedisOptions = {
-    host: process.env.REDIS_HOST || "localhost",
-    port: Number.isNaN(redisPort) ? 6379 : redisPort,
+    host: config.redis.host,
+    port: config.redis.port,
     maxRetriesPerRequest: null,
 };
 
