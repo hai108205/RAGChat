@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { cleanupQdrantCollections } from "../utils/qdrantCleanup.js";
+import { config } from "../config/runtime.js";
 
 async function main() {
     const args = process.argv.slice(2);
@@ -7,7 +8,7 @@ async function main() {
     const minAgeArg = args.find((arg) => arg.startsWith("--min-age-days="));
     const parsedMinAge = minAgeArg
         ? Number.parseInt(minAgeArg.split("=")[1], 10)
-        : Number.parseInt(process.env.QDRANT_CLEANUP_MIN_AGE_DAYS || "7", 10);
+        : config.qdrant.cleanupMinAgeDays;
 
     const minAgeDays = Number.isFinite(parsedMinAge) && parsedMinAge >= 0 ? parsedMinAge : 7;
 

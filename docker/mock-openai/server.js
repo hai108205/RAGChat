@@ -1,7 +1,8 @@
 import http from "http";
 import crypto from "crypto";
+import { config } from "./config.js";
 
-const PORT = parseInt(process.env.PORT || "8080", 10);
+const PORT = config.port;
 const capturedCallbacks = [];
 
 function makeVector(text, dims = 1536) {

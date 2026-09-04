@@ -11,6 +11,7 @@ import {
 } from "./utils/metrics.js";
 import logger from "./utils/logger.js";
 import { ApiError } from "./utils/ApiError.js";
+import { config } from "./config/runtime.js";
 
 const app = express();
 
@@ -73,13 +74,13 @@ app.get("/metrics", metricsAuthMiddleware, async (req: Request, res: Response) =
 
 app.use(
     cors({
-        origin: process.env.CORS_ORIGIN,
+        origin: config.server.corsOrigins,
         credentials: true,
-        methods: process.env.CORS_METHODS,
+        methods: config.server.corsMethods,
     }),
 );
 
-const jsonLimit = process.env.JSON_BODY_LIMIT || "20mb";
+const jsonLimit = config.server.jsonBodyLimit;
 app.use(express.json({ limit: jsonLimit }));
 app.use(express.urlencoded({ extended: true, limit: jsonLimit }));
 app.use(express.static("public"));
@@ -95,7 +96,7 @@ import adminRouter from "./routers/admin.route.js";
 import rocketchatRouter from "./routers/rocketchatIntegration.route.js";
 
 // Routes Declaration
-const ENABLE_WEB_ROUTES = process.env.ENABLE_WEB_ROUTES === "true";
+const ENABLE_WEB_ROUTES = config.server.enableWebRoutes;
 
 if (ENABLE_WEB_ROUTES) {
     app.use("/api/v1/user", userRouter);

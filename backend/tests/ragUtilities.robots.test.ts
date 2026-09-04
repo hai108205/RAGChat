@@ -95,7 +95,7 @@ describe("ragUtilities robots.txt parsing and crawl policy", () => {
         ).rejects.toThrow(/robots\.txt returned HTTP 500/);
     });
 
-    it("reads default crawl configuration flags from environment", () => {
+    it("reads crawl configuration from the isolated test environment", () => {
         process.env.CRAWL_USER_AGENT = "CustomAgent/2.0";
         process.env.CRAWL_RESPECT_ROBOTS_TXT = "false";
         process.env.CRAWL_DELAY_MS = "2500";

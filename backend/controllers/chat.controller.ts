@@ -12,6 +12,7 @@ import redis, {
 import crypto from "crypto";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { ApiError } from "../utils/ApiError.js";
+import { config } from "../config/runtime.js";
 import { createAuditEvent } from "../utils/audit.js";
 import { normalizeUrl } from "../utils/ragUtilities.js";
 import { getChatCreationQueue } from "../utils/queue.js";
@@ -566,9 +567,9 @@ const recentFailedIngestionRuns = asyncHandler(async (req: Request, res: Respons
     const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 25;
 
     const allowAll =
-        process.env.ADMIN_USERNAME &&
+        config.auth.adminUsername &&
         req.user?.username &&
-        req.user.username === process.env.ADMIN_USERNAME;
+        req.user.username === config.auth.adminUsername;
 
     const runs = await prisma.ingestionRun.findMany({
         where: allowAll
@@ -600,9 +601,9 @@ const recentFailedIngestionRuns = asyncHandler(async (req: Request, res: Respons
 
 const qdrantCleanup = asyncHandler(async (req: Request, res: Response) => {
     const isAdmin =
-        process.env.ADMIN_USERNAME &&
+        config.auth.adminUsername &&
         req.user?.username &&
-        req.user.username === process.env.ADMIN_USERNAME;
+        req.user.username === config.auth.adminUsername;
 
     if (!isAdmin) {
         throw new ApiError(403, "Admin privileges required to run Qdrant cleanup.");

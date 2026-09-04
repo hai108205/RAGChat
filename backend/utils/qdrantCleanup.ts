@@ -1,5 +1,6 @@
 import prisma from "./prismaClient.js";
 import { qdrant } from "./ragClients.js";
+import { config } from "../config/runtime.js";
 
 export interface DeleteQdrantCollectionSafeResult {
     deleted: boolean;
@@ -27,7 +28,7 @@ export async function deleteQdrantCollectionSafe(
     }
 }
 
-const DEFAULT_MIN_AGE_DAYS = Number.parseInt(process.env.QDRANT_CLEANUP_MIN_AGE_DAYS || "7", 10);
+const DEFAULT_MIN_AGE_DAYS = config.qdrant.cleanupMinAgeDays;
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
 function parseTimestampFromCollectionName(collectionName?: string | null): number | null {

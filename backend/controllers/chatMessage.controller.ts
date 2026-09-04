@@ -19,11 +19,12 @@ import { buildMessagesForLLM } from "../utils/contextBuilder.js";
 import { MemoryClient } from "mem0ai";
 import PDFDocument from "pdfkit";
 import { createAuditEvent } from "../utils/audit.js";
+import { config } from "../config/runtime.js";
 
 let memory: any = null;
 if (MEM0_ENABLED) {
-    if (process.env.MEM0_API_KEY) {
-        memory = new MemoryClient({ apiKey: process.env.MEM0_API_KEY });
+    if (config.integrations.mem0ApiKey) {
+        memory = new MemoryClient({ apiKey: config.integrations.mem0ApiKey });
     } else {
         console.warn(
             "WARNING: MEM0_ENABLED is true, but MEM0_API_KEY is not set in environment variables. Mem0 integration is disabled.",
@@ -136,7 +137,7 @@ const sendMessage = asyncHandler(async (req: Request, res: Response) => {
 
         openai = new OpenAI({
             baseURL: "https://openrouter.ai/api/v1",
-            apiKey: process.env.OPENROUTER_LLM_API_KEY,
+            apiKey: config.llm.openRouterLlmApiKey,
         });
     } else {
         const apiKey = await prisma.apiKey.findFirst({

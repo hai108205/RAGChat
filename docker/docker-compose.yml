@@ -13,7 +13,7 @@ x-backend-environment: &backend-environment
   REDIS_HOST: redis
   REDIS_PORT: "6379"
   QDRANT_URL: http://qdrant:6333
-  ROCKETCHAT_INTEGRATION_TOKEN: ${ROCKETCHAT_INTEGRATION_TOKEN:-ragchat-integration-token-secret}
+  ROCKETCHAT_INTEGRATION_TOKEN: ${ROCKETCHAT_INTEGRATION_TOKEN:?set ROCKETCHAT_INTEGRATION_TOKEN in docker/.env or the shell environment}
   ROCKETCHAT_CALLBACK_BASE_URL: http://rocketchat:3000
   ROCKETCHAT_CALLBACK_ALLOWED_ORIGINS: http://localhost:3001,http://rocketchat:3000
 

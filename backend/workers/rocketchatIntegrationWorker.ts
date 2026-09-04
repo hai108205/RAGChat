@@ -6,12 +6,12 @@ import { dispatchAlert } from "../utils/notificationDispatcher.js";
 import { ROCKETCHAT_QUEUE_NAME, type RocketChatJobData } from "../utils/rocketchatQueue.js";
 import { processRocketChatChat } from "../services/rocketchatChat.service.js";
 import { processRocketChatIngestion } from "../services/rocketchatIngestion.service.js";
+import { config } from "../config/runtime.js";
 
 let workerInstance: Worker<RocketChatJobData> | null = null;
 
 export function getRocketChatWorkerConcurrency(): number {
-    const parsed = Number.parseInt(process.env.ROCKETCHAT_WORKER_CONCURRENCY || "5", 10);
-    return Number.isNaN(parsed) || parsed < 1 ? 5 : parsed;
+    return config.rocketchat.workerConcurrency;
 }
 
 export async function processRocketChatJob(job: Job<RocketChatJobData>): Promise<any> {

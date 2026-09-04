@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import dns from "node:dns/promises";
 import Bottleneck from "bottleneck";
 import robotsParser from "robots-parser";
+import { config } from "../config/runtime.js";
 
 interface CachedRobots {
     expiresAt: number;
@@ -15,34 +16,19 @@ const domainLimiters = new Map<string, Bottleneck>();
 let openai: OpenAI | undefined;
 
 function getOpenAIClient(): OpenAI {
-    const apiKey = process.env.OPENAI_API_KEY || process.env.OPENROUTER_EMBEDDING_API_KEY;
+    const apiKey = config.llm.openAiApiKey || config.llm.openRouterEmbeddingApiKey;
     if (!apiKey) {
         throw new Error("OPENROUTER_EMBEDDING_API_KEY or OPENAI_API_KEY is required to generate vector embeddings.");
     }
 
     if (!openai) {
         openai = new OpenAI({
-            baseURL: process.env.OPENAI_BASE_URL || process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
+            baseURL: config.llm.openAiBaseUrl || config.llm.openRouterBaseUrl,
             apiKey: apiKey,
         });
     }
 
     return openai;
-}
-
-function readPositiveInt(value: string | undefined, fallback: number): number {
-    const parsed = Number.parseInt(value || "", 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function readNonNegativeInt(value: string | undefined, fallback: number): number {
-    const parsed = Number.parseInt(value || "", 10);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
-}
-
-function readBoolean(value: any, fallback: boolean): boolean {
-    if (value === undefined) return fallback;
-    return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 }
 
 export interface CrawlConfig {
@@ -57,13 +43,13 @@ export interface CrawlConfig {
 
 function getCrawlConfig(): CrawlConfig {
     return {
-        userAgent: process.env.CRAWL_USER_AGENT || "DocChatBot/1.0",
-        respectRobotsTxt: readBoolean(process.env.CRAWL_RESPECT_ROBOTS_TXT, true),
-        defaultDelayMs: readNonNegativeInt(process.env.CRAWL_DELAY_MS, 1000),
-        maxConcurrencyPerDomain: readPositiveInt(process.env.CRAWL_MAX_CONCURRENCY_PER_DOMAIN, 3),
-        robotsTimeoutMs: readPositiveInt(process.env.CRAWL_ROBOTS_TIMEOUT_MS, 5000),
-        robotsCacheTtlMs: readPositiveInt(process.env.CRAWL_ROBOTS_CACHE_TTL_MS, 10 * 60 * 1000),
-        allowOnRobotsError: readBoolean(process.env.CRAWL_ALLOW_ON_ROBOTS_ERROR, false),
+        userAgent: config.crawler.userAgent,
+        respectRobotsTxt: config.crawler.respectRobotsTxt,
+        defaultDelayMs: config.crawler.delayMs,
+        maxConcurrencyPerDomain: config.crawler.maxConcurrencyPerDomain,
+        robotsTimeoutMs: config.crawler.robotsTimeoutMs,
+        robotsCacheTtlMs: config.crawler.robotsCacheTtlMs,
+        allowOnRobotsError: config.crawler.allowOnRobotsError,
     };
 }
 
@@ -83,13 +69,13 @@ async function generateVectorEmbeddings(
     input: string | string[],
     options?: EmbeddingOptions | string,
 ): Promise<number[] | number[][]> {
-    const model = typeof options === "string" ? options : options?.model || process.env.EMBEDDING_MODEL || "openai/text-embedding-3-small";
+    const model = typeof options === "string" ? options : options?.model || config.llm.embeddingModel;
     const dimensions =
         typeof options === "object" && options?.dimensions
             ? options.dimensions
             : getEmbeddingDimensionsForModel(model);
 
-    if (process.env.NODE_ENV === "test" && (!process.env.OPENROUTER_EMBEDDING_API_KEY || process.env.OPENROUTER_EMBEDDING_API_KEY.startsWith("test-"))) {
+    if (config.environment === "test" && (!config.llm.openRouterEmbeddingApiKey || config.llm.openRouterEmbeddingApiKey.startsWith("test-"))) {
         const createDummyVector = (text: string): number[] => {
             const vec = new Array(dimensions).fill(0.01);
             let hash = 0;

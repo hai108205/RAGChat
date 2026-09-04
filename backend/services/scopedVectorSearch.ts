@@ -2,6 +2,7 @@ import prisma from "../utils/prismaClient.js";
 import logger from "../utils/logger.js";
 import { qdrant } from "../utils/ragClients.js";
 import { ApiError } from "../utils/ApiError.js";
+import { config } from "../config/runtime.js";
 import {
     generateVectorEmbeddings,
     getEmbeddingDimensionsForModel,
@@ -175,7 +176,7 @@ export async function scopedVectorSearch(
     const validSources: SourceWithModel[] = sources
         .filter((s) => s.collectionName && s.collectionName.trim().length > 0)
         .map((s) => {
-            const model = s.embeddingModel || process.env.EMBEDDING_MODEL || input.embeddingModel || "openai/text-embedding-3-small";
+            const model = s.embeddingModel || config.llm.embeddingModel || input.embeddingModel || "openai/text-embedding-3-small";
             const dimensions = s.embeddingDimensions || getEmbeddingDimensionsForModel(model);
             return {
                 id: s.id,

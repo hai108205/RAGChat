@@ -7,14 +7,13 @@ import crypto from "crypto";
 import { decryptApiKey } from "../utils/decrypt.js";
 import { LLM_MODELS } from "../utils/constants.js";
 import { createAuditEvent } from "../utils/audit.js";
+import { config } from "../config/runtime.js";
 
 function encryptApiKey(apikey: string) {
     const iv = crypto.randomBytes(12).toString("base64");
-    const cipherKey = process.env.CIPHER_KEY || "";
-
     const cipher = crypto.createCipheriv(
         "aes-256-gcm",
-        Buffer.from(cipherKey, "base64"),
+        config.encryption.key,
         Buffer.from(iv, "base64"),
     );
 
