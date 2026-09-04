@@ -115,9 +115,15 @@ function Send-JsonRequest {
         $content = ""
         if ($null -ne $webEx.Response) {
             $statusCode = [int]$webEx.Response.StatusCode
-            $reader = New-Object System.IO.StreamReader($webEx.Response.GetResponseStream())
-            $content = $reader.ReadToEnd()
-            $reader.Dispose()
+            # Windows PowerShell's Invoke-WebRequest may consume the error
+            # response stream before this catch block. In that case it exposes
+            # the JSON body through ErrorDetails instead.
+            $content = $_.ErrorDetails.Message
+            if ([string]::IsNullOrWhiteSpace($content)) {
+                $reader = New-Object System.IO.StreamReader($webEx.Response.GetResponseStream())
+                $content = $reader.ReadToEnd()
+                $reader.Dispose()
+            }
         }
         $parsedJson = $null
         try {
@@ -268,10 +274,12 @@ $asyncMsgPayload = @{
     query         = "How does Rocket.Chat async message queuing work with BullMQ?"
     callbackUrl   = "http://openai-mock:8080/callback"
 }
+$asyncHeaders = $authHeader.Clone()
+$asyncHeaders["X-Request-Id"] = $msgRequestId
 
 $asyncResp = Send-JsonRequest -Uri "$BackendUrl/api/v1/integrations/rocketchat/messages/async" `
     -Method "POST" `
-    -Headers $authHeader `
+    -Headers $asyncHeaders `
     -Body $asyncMsgPayload
 
 $enqueuePassed = ($asyncResp.StatusCode -eq 202 -and $asyncResp.Json.data.status -eq "accepted" -and $asyncResp.Json.data.requestId -eq $msgRequestId)
@@ -335,10 +343,12 @@ $ingestPayload = @{
     requestId     = $ingestReqId
     callbackUrl   = "http://openai-mock:8080/callback"
 }
+$ingestHeaders = $authHeader.Clone()
+$ingestHeaders["X-Request-Id"] = $ingestReqId
 
 $ingestResp = Send-JsonRequest -Uri "$BackendUrl/api/v1/integrations/rocketchat/sources/base64" `
     -Method "POST" `
-    -Headers $authHeader `
+    -Headers $ingestHeaders `
     -Body $ingestPayload
 
 $ingestAccepted = ($ingestResp.StatusCode -eq 202 -and $ingestResp.Json.data.status -eq "accepted")
@@ -403,10 +413,12 @@ $betaPayload = @{
     requestId     = $betaIngestReqId
     callbackUrl   = "http://openai-mock:8080/callback"
 }
+$betaIngestHeaders = $authHeader.Clone()
+$betaIngestHeaders["X-Request-Id"] = $betaIngestReqId
 
 $betaResp = Send-JsonRequest -Uri "$BackendUrl/api/v1/integrations/rocketchat/sources/base64" `
     -Method "POST" `
-    -Headers $authHeader `
+    -Headers $betaIngestHeaders `
     -Body $betaPayload
 
 # Wait briefly for beta indexing to settle

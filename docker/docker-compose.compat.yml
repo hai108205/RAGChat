@@ -15,7 +15,7 @@ x-compat-environment: &compat-environment
   REFRESH_TOKEN_EXPIRY: 1d
   ACCESS_TOKEN_SECRET: compat-access-secret-min-32-chars-long
   ACCESS_TOKEN_EXPIRY: 1h
-  CIPHER_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  CIPHER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
   ENCRYPTION_ALGORITHM: aes-256-gcm
   OPENROUTER_LLM_API_KEY: test-compat-llm-key
   OPENROUTER_EMBEDDING_API_KEY: test-compat-embedding-key

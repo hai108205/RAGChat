@@ -13,6 +13,7 @@ COPY prisma ./prisma/
 RUN pnpm install --frozen-lockfile
 
 COPY tsconfig.json prisma.config.ts ./
+COPY config ./config/
 COPY types ./types/
 COPY utils ./utils/
 COPY middlewares ./middlewares/
@@ -38,6 +39,7 @@ RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
+COPY --from=builder /app/config ./config
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/generated ./dist/generated

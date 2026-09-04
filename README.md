@@ -456,7 +456,7 @@ Sau khi deploy thành công, đăng nhập vào Rocket.Chat với quyền Admin:
 1. Vào **Administration** (Quản trị) -> **Apps** (Ứng dụng) -> Chọn **RAGChat** -> Chuyển sang tab **Settings** (Cài đặt).
 2. Điền các thông số:
    - **Backend URL**: Địa chỉ backend mà Rocket.Chat có thể kết nối tới (Ví dụ trong mạng Docker: `http://backend:8000`, hoặc chạy ngoài: `http://localhost:8000` hoặc IP máy chủ).
-   - **Integration Token**: Nhập đúng chuỗi bí mật đã thiết lập trong biến `ROCKETCHAT_INTEGRATION_TOKEN` ở file `.env`.
+   - **Integration Token**: Nhập đúng chuỗi bí mật đã thiết lập trong biến `ROCKETCHAT_INTEGRATION_TOKEN` ở file `backend/.env`.
    - **Callback Base URL**: Địa chỉ gốc của Rocket.Chat mà Backend có thể gọi ngược lại (Ví dụ: `http://rocketchat:3000` hoặc `http://localhost:3001`).
    - **LLM Model**: Chọn mô hình mặc định (ví dụ: `openai/gpt-4o-mini`, `openai/gpt-4o`, `anthropic/claude-3-5-sonnet`).
    - **Embedding Model**: Chọn `openai/text-embedding-3-small`.

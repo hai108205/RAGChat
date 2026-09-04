@@ -1,8 +1,6 @@
 x-backend-env-file: &backend-env-file
-  - path: ../backend/.env.example
-    required: true
   - path: ../backend/.env
-    required: false
+    required: true
 
 x-backend-environment: &backend-environment
   NODE_ENV: production
@@ -13,7 +11,6 @@ x-backend-environment: &backend-environment
   REDIS_HOST: redis
   REDIS_PORT: "6379"
   QDRANT_URL: http://qdrant:6333
-  ROCKETCHAT_INTEGRATION_TOKEN: ${ROCKETCHAT_INTEGRATION_TOKEN:?set ROCKETCHAT_INTEGRATION_TOKEN in docker/.env or the shell environment}
   ROCKETCHAT_CALLBACK_BASE_URL: http://rocketchat:3000
   ROCKETCHAT_CALLBACK_ALLOWED_ORIGINS: http://localhost:3001,http://rocketchat:3000
 
@@ -95,6 +92,8 @@ services:
     container_name: ragchat-backend
     env_file: *backend-env-file
     environment: *backend-environment
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
     depends_on:
@@ -125,6 +124,8 @@ services:
     command: ["node", "dist/chatWorker.js"]
     env_file: *backend-env-file
     environment: *backend-environment
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -149,6 +150,8 @@ services:
     environment:
       <<: *backend-environment
       ROCKETCHAT_WORKER_CONCURRENCY: "5"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy

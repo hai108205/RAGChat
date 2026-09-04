@@ -209,7 +209,6 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
                     chatId: chat.id,
                     inputTokens,
                     outputTokens,
-                    model: defaultModel,
                 },
             });
         }

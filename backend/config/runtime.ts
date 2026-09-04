@@ -1,10 +1,7 @@
-import dotenv from "dotenv";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
 import { parseEnvironment, type AppConfig } from "./env.js";
+import { loadEnvironmentFile } from "./loadEnv.js";
 
-const configDirectory = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(configDirectory, "../.env") });
+loadEnvironmentFile(import.meta.url);
 
 const startupConfig = parseEnvironment(process.env);
 
