@@ -1,6 +1,7 @@
 const MINIMUM_COSINE_SCORE = 0.5;
 const MAXIMUM_SCORE_GAP = 0.12;
 const MAXIMUM_CANDIDATES = 3;
+const SCORE_COMPARISON_TOLERANCE = Number.EPSILON * 8;
 
 type ScoredCandidate = {
     score: unknown;
@@ -53,7 +54,7 @@ export function selectGroundedCandidates<T extends ScoredCandidate>(candidates: 
     if (bestScore === undefined) return [];
 
     return validCandidates
-        .filter((entry) => bestScore - entry.score <= MAXIMUM_SCORE_GAP)
+        .filter((entry) => bestScore - entry.score <= MAXIMUM_SCORE_GAP + SCORE_COMPARISON_TOLERANCE)
         .slice(0, MAXIMUM_CANDIDATES)
         .map((entry) => entry.candidate);
 }

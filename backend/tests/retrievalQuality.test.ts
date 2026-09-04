@@ -36,6 +36,36 @@ describe("retrieval quality utilities", () => {
         ).toEqual(["clamped-high", "near-high"]);
     });
 
+    it("keeps candidates exactly 0.12 below the best score despite floating-point representation", () => {
+        expect(
+            selectGroundedCandidates([
+                { id: "best", score: 0.81 },
+                { id: "gap-boundary", score: 0.69 },
+            ]).map((candidate) => candidate.id),
+        ).toEqual(["best", "gap-boundary"]);
+    });
+
+    it("accepts the inclusive 0.50 floor but rejects raw 0.495 before display rounding", () => {
+        expect(
+            selectGroundedCandidates([
+                { id: "best", score: 0.505 },
+                { id: "floor", score: 0.5 },
+                { id: "rounding-trap", score: 0.495 },
+            ]).map((candidate) => candidate.id),
+        ).toEqual(["best", "floor"]);
+    });
+
+    it("retains Aurora while rejecting lower-scoring retrieval distractors", () => {
+        expect(
+            selectGroundedCandidates([
+                { id: "aurora", score: 0.56 },
+                { id: "retention", score: 0.49 },
+                { id: "nimbus", score: 0.46 },
+                { id: "visitor", score: 0.45 },
+            ]).map((candidate) => candidate.id),
+        ).toEqual(["aurora"]);
+    });
+
     it("caps grounded candidates at three in descending unrounded score order", () => {
         const candidates = [
             { id: "third", score: 0.86 },
