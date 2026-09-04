@@ -72,8 +72,9 @@ export async function registerSettings(
             public: false,
             i18nLabel: 'LLM Model',
             i18nDescription: 'Language model for answer generation',
-            packageValue: 'openai/gpt-4o-mini',
+            packageValue: 'api-ai.box/deepseek-v4-flash',
             values: [
+                { key: 'api-ai.box/deepseek-v4-flash', i18nLabel: 'DeepSeek V4 Flash (api-ai.box)' },
                 { key: 'openai/gpt-4o-mini', i18nLabel: 'GPT-4o Mini' },
                 { key: 'openai/gpt-4o', i18nLabel: 'GPT-4o' },
                 { key: 'anthropic/claude-3-5-sonnet', i18nLabel: 'Claude 3.5 Sonnet' },
@@ -89,8 +90,9 @@ export async function registerSettings(
             public: false,
             i18nLabel: 'Embedding Model',
             i18nDescription: 'Model for generating document and query embeddings',
-            packageValue: 'openai/text-embedding-3-small',
+            packageValue: 'openrouter/openai/text-embedding-3-small',
             values: [
+                { key: 'openrouter/openai/text-embedding-3-small', i18nLabel: 'OpenAI text-embedding-3-small (OpenRouter)' },
                 { key: 'openai/text-embedding-3-small', i18nLabel: 'OpenAI text-embedding-3-small' },
                 { key: 'openai/text-embedding-3-large', i18nLabel: 'OpenAI text-embedding-3-large' },
             ],

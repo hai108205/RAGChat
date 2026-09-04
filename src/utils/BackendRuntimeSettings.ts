@@ -11,14 +11,15 @@ export interface BackendRuntimeSettings {
 
 export const DEFAULT_BACKEND_RUNTIME_SETTINGS: BackendRuntimeSettings = {
     workspaceId: 'default',
-    model: 'openai/gpt-4o-mini',
-    embeddingModel: 'openai/text-embedding-3-small',
+    model: 'api-ai.box/deepseek-v4-flash',
+    embeddingModel: 'openrouter/openai/text-embedding-3-small',
     temperature: 0.7,
     maxHistory: 10,
     enableCitations: true,
 };
 
 export const ALLOWED_LLM_MODELS = [
+    'api-ai.box/deepseek-v4-flash',
     'openai/gpt-4o-mini',
     'openai/gpt-4o',
     'anthropic/claude-3-5-sonnet',
@@ -26,6 +27,7 @@ export const ALLOWED_LLM_MODELS = [
 ] as const;
 
 export const ALLOWED_EMBEDDING_MODELS = [
+    'openrouter/openai/text-embedding-3-small',
     'openai/text-embedding-3-small',
     'openai/text-embedding-3-large',
 ] as const;

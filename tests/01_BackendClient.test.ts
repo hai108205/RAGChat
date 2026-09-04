@@ -5,7 +5,12 @@ import { ERRORS } from "../src/constants/Errors";
 import { MockRead } from "./mocks/MockRead";
 import { MockHttp } from "./mocks/MockHttp";
 import { startRealBackend, stopRealBackend } from "./server/RealBackendHarness";
-import { getBackendRuntimeSettings, DEFAULT_BACKEND_RUNTIME_SETTINGS } from "../src/utils/BackendRuntimeSettings";
+import {
+    getBackendRuntimeSettings,
+    DEFAULT_BACKEND_RUNTIME_SETTINGS,
+    ALLOWED_LLM_MODELS,
+    ALLOWED_EMBEDDING_MODELS,
+} from "../src/utils/BackendRuntimeSettings";
 import { RequestMethod } from "@rocket.chat/apps-engine/definition/accessors";
 
 describe("Unit Test Suite: BackendClient Runtime Settings Injection", () => {
@@ -23,10 +28,15 @@ describe("Unit Test Suite: BackendClient Runtime Settings Injection", () => {
 
     it("reads default runtime settings when unconfigured", async () => {
         const settings = await getBackendRuntimeSettings(mockRead);
-        expect(settings.model).toBe("openai/gpt-4o-mini");
-        expect(settings.embeddingModel).toBe("openai/text-embedding-3-small");
+        expect(settings.model).toBe("api-ai.box/deepseek-v4-flash");
+        expect(settings.embeddingModel).toBe("openrouter/openai/text-embedding-3-small");
         expect(settings.temperature).toBe(0.7);
         expect(settings.workspaceId).toBe("default");
+    });
+
+    it("advertises the gateway models in the selectable runtime model lists", () => {
+        expect(ALLOWED_LLM_MODELS).toContain("api-ai.box/deepseek-v4-flash");
+        expect(ALLOWED_EMBEDDING_MODELS).toContain("openrouter/openai/text-embedding-3-small");
     });
 
     it("reads custom runtime settings from MockRead and clamps temperature", async () => {

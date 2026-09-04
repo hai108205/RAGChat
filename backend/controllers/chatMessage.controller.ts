@@ -20,6 +20,7 @@ import { MemoryClient } from "mem0ai";
 import PDFDocument from "pdfkit";
 import { createAuditEvent } from "../utils/audit.js";
 import { config } from "../config/runtime.js";
+import { retrieveWebChatSources } from "../services/webChatRetrieval.service.js";
 
 let memory: any = null;
 if (MEM0_ENABLED) {
@@ -172,115 +173,22 @@ const sendMessage = asyncHandler(async (req: Request, res: Response) => {
     let relevantSources: any[] = [];
     const relevantNodes: any[] = [];
 
-    if (chat.chatSources[0] && !chat.chatSources[0].isVectorLess) {
-        const userPromptEmbeddings = (await generateVectorEmbeddings(userPrompt)) as number[];
+    relevantSources = await retrieveWebChatSources({
+        query: userPrompt,
+        sources: chat.chatSources,
+        dependencies: {
+            generateEmbedding: async (query) => (await generateVectorEmbeddings(query)) as number[],
+            qdrant: { query: (collectionName, request) => qdrant.query(collectionName, request) as any },
+        },
+    });
 
-        const allDensePoints: any[] = [];
-        const allKeywordPoints: any[] = [];
-
-        const calculateTermFrequency = (text: string, queryTerms: string[]) => {
-            if (!text) return 0;
-            const lowerText = text.toLowerCase();
-            return queryTerms.reduce((count, term) => {
-                let termCount = 0;
-                let index = lowerText.indexOf(term);
-                while (index !== -1) {
-                    termCount++;
-                    index = lowerText.indexOf(term, index + term.length);
-                }
-                return count + termCount;
-            }, 0);
-        };
-
-        const queryTerms = userPrompt
-            .toLowerCase()
-            .replace(/[^\w\s]/g, "")
-            .split(/\s+/)
-            .filter((t: string) => t.length > 2);
-
-        for (const source of chat.chatSources) {
-            if (!source.collectionName) continue;
-
-            try {
-                await qdrant.createPayloadIndex(source.collectionName, {
-                    field_name: "body",
-                    field_schema: "text",
-                });
-            } catch {
-                // Ignore index exists or other non-fatal indexing errors
-            }
-
-            const denseTask = qdrant.query(source.collectionName, {
-                query: userPromptEmbeddings,
-                limit: 10,
-                with_payload: true,
-                score_threshold: 0.35,
-            });
-
-            const keywordTask = qdrant.scroll(source.collectionName, {
-                filter: {
-                    must: [{ key: "body", match: { text: userPrompt } }],
-                },
-                limit: 20,
-                with_payload: true,
-            });
-
-            const [denseResults, keywordResults] = await Promise.all([denseTask, keywordTask]);
-
-            if (denseResults?.points?.length) {
-                allDensePoints.push(...denseResults.points);
-            }
-
-            if (keywordResults?.points?.length) {
-                const scoredKeywordPoints = keywordResults.points.map((pt: any) => {
-                    const score = calculateTermFrequency(pt.payload.body, queryTerms);
-                    return { ...pt, local_score: score };
-                });
-                scoredKeywordPoints.sort((a: any, b: any) => b.local_score - a.local_score);
-                allKeywordPoints.push(...scoredKeywordPoints);
-            }
-        }
-
-        allDensePoints.sort((a, b) => b.score - a.score);
-        allKeywordPoints.sort((a, b) => b.local_score - a.local_score);
-
-        const fusedScores: Record<string, number> = {};
-        const fusedPayloads: Record<string, any> = {};
-        const k = 60;
-
-        allDensePoints.forEach((pt, index) => {
-            if (!fusedScores[pt.id]) fusedScores[pt.id] = 0;
-            fusedScores[pt.id] += 1 / (k + index + 1);
-            fusedPayloads[pt.id] = pt;
-        });
-
-        allKeywordPoints.forEach((pt, index) => {
-            if (!fusedScores[pt.id]) fusedScores[pt.id] = 0;
-            fusedScores[pt.id] += 1 / (k + index + 1);
-            if (!fusedPayloads[pt.id]) fusedPayloads[pt.id] = pt;
-        });
-
-        const sortedFusedIds = Object.keys(fusedScores).sort((a, b) => fusedScores[b] - fusedScores[a]);
-        const topFusedPoints = sortedFusedIds.slice(0, 5).map((id) => ({
-            ...fusedPayloads[id],
-            score: fusedScores[id],
-        }));
-
-        relevantSources = topFusedPoints;
-    } else {
-        if (chat.collectionName) {
-            await prisma.documentTree.findUnique({
-                where: { id: chat.collectionName },
-            });
-        }
-    }
-
-    let systemInstructions = "You are a helpful assistant for answering questions. \n";
+    let systemInstructions = "You are a documentation-grounded assistant. \n";
     if (relevantSources.length || relevantNodes.length) {
         systemInstructions +=
-            "Use the provided documentation sources to answer. If the answer isn't in the sources, say you don't know. Be concise, use Markdown, and wrap code in triple backticks.";
+            "Answer only from the provided documentation evidence. If it does not establish the answer, say you don't know based on the provided documentation. Do not use general knowledge. Be concise, use Markdown, and wrap code in triple backticks.";
     } else {
-        systemInstructions += "Answer the user's greeting or general question directly.";
+        systemInstructions +=
+            "No documentation evidence was retrieved. Say you don't know based on the provided documentation; do not answer from general knowledge.";
     }
 
     let memories: any[] = [];
