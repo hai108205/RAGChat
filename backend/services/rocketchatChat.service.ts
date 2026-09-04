@@ -27,6 +27,9 @@ export interface RocketChatChatPayload {
     requestId: string;
 }
 
+const INSUFFICIENT_DOCUMENTATION_EVIDENCE =
+    "I don't have enough evidence in the provided documentation to answer this question.";
+
 function getLLMClient(): OpenAI {
     if (
         config.environment === "test" &&
@@ -113,7 +116,7 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
             threadId,
             embeddingModel,
             topK: 3,
-            minScore: 0.5,
+            minScore: 0.3,
         });
 
         const citations = formatRocketChatCitations(searchResults);
@@ -149,29 +152,31 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
 
         // 3. Call LLM
         const openai = getLLMClient();
-        let llmResponse = "";
+        let llmResponse = searchResults.length > 0 ? "" : INSUFFICIENT_DOCUMENTATION_EVIDENCE;
         let inputTokens = 0;
         let outputTokens = 0;
 
-        try {
-            const completion = await openai.chat.completions.create({
-                model: defaultModel,
-                temperature: temp,
-                messages,
-            });
-            llmResponse =
-                completion.choices?.[0]?.message?.content ||
-                "No response received.";
-            if (completion.usage) {
-                inputTokens = completion.usage.prompt_tokens || 0;
-                outputTokens = completion.usage.completion_tokens || 0;
+        if (searchResults.length > 0) {
+            try {
+                const completion = await openai.chat.completions.create({
+                    model: defaultModel,
+                    temperature: temp,
+                    messages,
+                });
+                llmResponse =
+                    completion.choices?.[0]?.message?.content ||
+                    "No response received.";
+                if (completion.usage) {
+                    inputTokens = completion.usage.prompt_tokens || 0;
+                    outputTokens = completion.usage.completion_tokens || 0;
+                }
+            } catch (err: any) {
+                logger.error(
+                    { err: err.message, requestId },
+                    "LLM completion error in Rocket.Chat integration worker",
+                );
+                throw err;
             }
-        } catch (err: any) {
-            logger.error(
-                { err: err.message, requestId },
-                "LLM completion error in Rocket.Chat integration worker",
-            );
-            throw err;
         }
 
         // 4. Persist message record

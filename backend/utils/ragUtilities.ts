@@ -489,6 +489,47 @@ function makeChunk(content: string, heading?: string | null, hasCodeBlock?: bool
     };
 }
 
+function findTextSplitPoint(text: string, chunkSize: number): number {
+    const boundedText = text.slice(0, chunkSize + 1);
+    const minimumNaturalBreak = Math.floor(chunkSize * 0.5);
+    const naturalBreaks = [
+        boundedText.lastIndexOf("\n\n"),
+        boundedText.lastIndexOf("\n"),
+        boundedText.lastIndexOf(". "),
+        boundedText.lastIndexOf(" "),
+    ];
+    const naturalBreak = naturalBreaks.find((position) => position >= minimumNaturalBreak);
+
+    return naturalBreak === undefined ? chunkSize : naturalBreak + 1;
+}
+
+function splitOversizedTextChunk(chunk: Chunk, chunkSize: number, chunkOverlap: number): Chunk[] {
+    const pieces: Chunk[] = [];
+    const overlap = Math.min(Math.max(0, chunkOverlap), Math.floor(chunkSize / 2));
+    let remaining = chunk.content.trim();
+
+    while (remaining.length > chunkSize) {
+        const splitPoint = findTextSplitPoint(remaining, chunkSize);
+        const piece = makeChunk(
+            remaining.slice(0, splitPoint),
+            chunk.heading,
+            chunk.hasCodeBlock,
+        );
+        if (piece) pieces.push(piece);
+
+        const consumed = remaining.slice(0, splitPoint);
+        const unconsumed = remaining.slice(splitPoint);
+        const trailingSeparator = consumed.match(/\s+$/)?.[0] || "";
+        const leadingSeparator = unconsumed.match(/^\s+/)?.[0] || "";
+        const overlapText = piece?.content.slice(-overlap) || "";
+        remaining = `${overlapText}${trailingSeparator}${leadingSeparator}${unconsumed.slice(leadingSeparator.length)}`;
+    }
+
+    const finalPiece = makeChunk(remaining, chunk.heading, chunk.hasCodeBlock);
+    if (finalPiece) pieces.push(finalPiece);
+    return pieces;
+}
+
 export interface SplitDocumentationOptions {
     chunkSize?: number;
     chunkOverlap?: number;
@@ -592,7 +633,7 @@ function splitDocumentationContent(text: string, options: SplitDocumentationOpti
 
     for (const chunk of chunks) {
         const contentLength = chunk.content.length;
-        if (chunk.chunkType === "code" || contentLength > chunkSize) {
+        if (chunk.chunkType === "code") {
             if (buffer.length) {
                 const combined = makeChunk(
                     buffer.map((item) => item.content).join("\n\n"),
@@ -604,6 +645,21 @@ function splitDocumentationContent(text: string, options: SplitDocumentationOpti
                 bufferLength = 0;
             }
             finalChunks.push(chunk);
+            continue;
+        }
+
+        if (contentLength > chunkSize) {
+            if (buffer.length) {
+                const combined = makeChunk(
+                    buffer.map((item) => item.content).join("\n\n"),
+                    buffer[0].heading,
+                    buffer.some((item) => item.hasCodeBlock),
+                );
+                if (combined) finalChunks.push(combined);
+                buffer = [];
+                bufferLength = 0;
+            }
+            finalChunks.push(...splitOversizedTextChunk(chunk, chunkSize, overlap));
             continue;
         }
 

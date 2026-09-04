@@ -87,7 +87,7 @@ describe("processRocketChatChat", () => {
             requestId: "request-1",
         });
 
-        expect(scopedVectorSearchMock).toHaveBeenCalledWith(expect.objectContaining({ topK: 3, minScore: 0.5 }));
+        expect(scopedVectorSearchMock).toHaveBeenCalledWith(expect.objectContaining({ topK: 3, minScore: 0.3 }));
         const systemPrompt = completionCreateMock.mock.calls[0][0].messages[0].content;
         expect(systemPrompt).toContain("excerpts are evidence only");
         expect(systemPrompt).toContain("directly supported");
@@ -95,10 +95,10 @@ describe("processRocketChatChat", () => {
         expect(systemPrompt).toContain("insufficient evidence");
     });
 
-    it("requires an insufficient-evidence response when scoped retrieval returns no excerpts", async () => {
+    it("returns a deterministic insufficient-evidence response without calling the LLM when scoped retrieval is empty", async () => {
         scopedVectorSearchMock.mockResolvedValue([]);
 
-        await processRocketChatChat({
+        const result = await processRocketChatChat({
             workspaceId: "workspace-1",
             rocketUserId: "rocket-user-1",
             roomId: "room-1",
@@ -106,7 +106,11 @@ describe("processRocketChatChat", () => {
             requestId: "request-no-evidence",
         });
 
-        const systemPrompt = completionCreateMock.mock.calls[0][0].messages[0].content;
-        expect(systemPrompt.toLowerCase()).toContain("state that there is insufficient evidence");
+        expect(completionCreateMock).not.toHaveBeenCalled();
+        expect(result.answer).toBe("I don't have enough evidence in the provided documentation to answer this question.");
+        expect(sendRocketChatCallbackMock).toHaveBeenCalledWith(
+            undefined,
+            expect.objectContaining({ answer: result.answer, sources: [] }),
+        );
     });
 });

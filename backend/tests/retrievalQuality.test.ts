@@ -55,6 +55,20 @@ describe("retrieval quality utilities", () => {
         ).toEqual(["best", "floor"]);
     });
 
+    it("allows an explicit lower floor for a calibrated retrieval flow without changing the default", () => {
+        const candidates = [
+            { id: "exact-docx-match", score: 0.35331106 },
+            { id: "below-rocketchat-floor", score: 0.299 },
+        ];
+
+        expect(
+            (selectGroundedCandidates as any)(candidates, { minimumScore: 0.3 }).map(
+                (candidate: { id: string }) => candidate.id,
+            ),
+        ).toEqual(["exact-docx-match"]);
+        expect(selectGroundedCandidates(candidates)).toEqual([]);
+    });
+
     it("retains Aurora while rejecting lower-scoring retrieval distractors", () => {
         expect(
             selectGroundedCandidates([

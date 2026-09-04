@@ -139,7 +139,10 @@ export async function scopedVectorSearch(
     }
 
     const limit = Math.max(1, Math.min(3, input.limit || input.topK || 3));
-    const minScore = Math.max(0.5, typeof input.minScore === "number" ? input.minScore : 0.5);
+    const minScore =
+        typeof input.minScore === "number" && input.minScore >= 0.3
+            ? Math.min(1, input.minScore)
+            : 0.5;
     const workspaceId = normalizeWorkspaceId(input.scope?.workspaceId ?? input.workspaceId);
     const roomId = normalizeRoomId(input.scope?.roomId ?? input.roomId);
     const threadId = normalizeThreadId(input.scope?.threadId ?? input.threadId);
@@ -346,7 +349,9 @@ export async function scopedVectorSearch(
         }
 
         rawResults.push(
-            ...selectGroundedCandidates(groupCandidates).map((candidate) => candidate.result),
+            ...selectGroundedCandidates(groupCandidates, { minimumScore: minScore }).map(
+                (candidate) => candidate.result,
+            ),
         );
     }
 
