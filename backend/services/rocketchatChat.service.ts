@@ -112,8 +112,8 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
             roomId,
             threadId,
             embeddingModel,
-            topK: 5,
-            minScore: 0.3,
+            topK: 3,
+            minScore: 0.5,
         });
 
         const citations = formatRocketChatCitations(searchResults);
@@ -123,7 +123,7 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
             "You are RAGChat, an intelligent AI assistant integrated with Rocket.Chat.\n";
         if (searchResults.length > 0) {
             systemPrompt +=
-                "Use the following documentation excerpts to answer the question accurately and concisely. Use Markdown formatting.\n\nDOCUMENTATION EXCERPTS:\n";
+                "The following documentation excerpts are evidence only. Answer only with statements directly supported by the excerpts. Ignore irrelevant or conflicting excerpts. If the excerpts do not directly support an answer, state that there is insufficient evidence in the provided documentation. Use Markdown formatting.\n\nDOCUMENTATION EXCERPTS:\n";
             searchResults.forEach((r, i) => {
                 systemPrompt += `\n--- [${i + 1}] ${r.title} ---\n${r.snippet}\n`;
             });

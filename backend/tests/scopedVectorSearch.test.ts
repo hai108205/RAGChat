@@ -182,6 +182,59 @@ describe("scopedVectorSearch Service", () => {
     });
 
     describe("Model grouping and single embedding generation", () => {
+        it("applies raw-score grounding within each embedding group before merging and caps the final output at three", async () => {
+            chatSourceFindManyMock.mockResolvedValue([
+                {
+                    id: "small-source",
+                    heading: "Small embeddings",
+                    documentationUrl: "https://docs/small",
+                    collectionName: "small-collection",
+                    embeddingModel: "openai/text-embedding-3-small",
+                    embeddingDimensions: 1536,
+                },
+                {
+                    id: "large-source",
+                    heading: "Large embeddings",
+                    documentationUrl: "https://docs/large",
+                    collectionName: "large-collection",
+                    embeddingModel: "openai/text-embedding-3-large",
+                    embeddingDimensions: 3072,
+                },
+            ]);
+
+            qdrantQueryMock.mockImplementation(async (collectionName: string) => ({
+                points:
+                    collectionName === "small-collection"
+                        ? [
+                              { score: 0.805, payload: { title: "Small best", snippet: "Supported" } },
+                              { score: 0.685, payload: { title: "Small boundary", snippet: "Supported" } },
+                              { score: 0.495, payload: { title: "Rounded floor trap", snippet: "Unsupported" } },
+                          ]
+                        : [
+                              { score: 0.806, payload: { title: "Large best", snippet: "Supported" } },
+                              { score: 0.686, payload: { title: "Large boundary", snippet: "Supported" } },
+                              { score: 0.675, payload: { title: "Large gap reject", snippet: "Unsupported" } },
+                          ],
+            }));
+
+            const results = await scopedVectorSearch({
+                query: "grounded query",
+                workspaceId: "default",
+                roomId: "GENERAL",
+                topK: 10,
+                minScore: 0,
+            });
+
+            expect(results.map((result) => result.title)).toEqual([
+                "Large best",
+                "Small best",
+                "Large boundary",
+            ]);
+            expect(results).toHaveLength(3);
+            expect(results.map((result) => result.metadata.rawScore)).not.toContain(0.495);
+            expect(results.map((result) => result.metadata.rawScore)).not.toContain(0.675);
+        });
+
         it("groups sources by (embeddingModel, embeddingDimensions) and generates embeddings once per group", async () => {
             chatSourceFindManyMock.mockResolvedValue([
                 {

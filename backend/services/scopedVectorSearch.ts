@@ -14,6 +14,7 @@ import {
     normalizeThreadId,
     type RocketChatScopeFilter,
 } from "../utils/rocketchatScope.js";
+import { selectGroundedCandidates } from "../utils/retrievalQuality.js";
 
 export interface ScopedVectorSearchInput {
     query: string;
@@ -92,6 +93,31 @@ export function deduplicateAndRankResults(
     return unique.slice(0, limit);
 }
 
+function deduplicateAndRankVectorResults(
+    results: ScopedSearchResult[],
+    limit: number,
+): ScopedSearchResult[] {
+    const seen = new Set<string>();
+    const unique: ScopedSearchResult[] = [];
+    const rawScore = (result: ScopedSearchResult): number => {
+        const score = result.metadata.rawScore;
+        return typeof score === "number" && Number.isFinite(score)
+            ? Math.max(0, Math.min(1, score))
+            : 0;
+    };
+
+    const sorted = [...results].sort((a, b) => rawScore(b) - rawScore(a));
+    for (const item of sorted) {
+        const key = `${(item.title || "").trim().toLowerCase()}::${(item.snippet || "").trim().slice(0, 25).toLowerCase()}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            unique.push(item);
+        }
+    }
+
+    return unique.slice(0, limit);
+}
+
 /**
  * Scoped Vector Search Service
  * 
@@ -112,8 +138,8 @@ export async function scopedVectorSearch(
         return [];
     }
 
-    const limit = Math.max(1, Math.min(50, input.limit || input.topK || 5));
-    const minScore = typeof input.minScore === "number" ? input.minScore : 0.0;
+    const limit = Math.max(1, Math.min(3, input.limit || input.topK || 3));
+    const minScore = Math.max(0.5, typeof input.minScore === "number" ? input.minScore : 0.5);
     const workspaceId = normalizeWorkspaceId(input.scope?.workspaceId ?? input.workspaceId);
     const roomId = normalizeRoomId(input.scope?.roomId ?? input.roomId);
     const threadId = normalizeThreadId(input.scope?.threadId ?? input.threadId);
@@ -221,6 +247,7 @@ export async function scopedVectorSearch(
     const qdrantErrors: Error[] = [];
 
     for (const group of modelGroups.values()) {
+        const groupCandidates: Array<{ score: unknown; result: ScopedSearchResult }> = [];
         let queryVector: number[];
         try {
             const embResult = await generateVectorEmbeddings(query, {
@@ -291,18 +318,21 @@ export async function scopedVectorSearch(
                         source.documentationUrl ||
                         "";
 
-                    rawResults.push({
-                        title,
-                        snippet,
-                        pageUrl,
-                        relevance,
-                        metadata: {
-                            retrievalMode: "vector",
-                            sourceId: source.id,
-                            collectionName,
-                            chunkType: payload.chunkType,
-                            embeddingModel: group.model,
-                            rawScore: pt.score,
+                    groupCandidates.push({
+                        score: pt.score,
+                        result: {
+                            title,
+                            snippet,
+                            pageUrl,
+                            relevance,
+                            metadata: {
+                                retrievalMode: "vector",
+                                sourceId: source.id,
+                                collectionName,
+                                chunkType: payload.chunkType,
+                                embeddingModel: group.model,
+                                rawScore: pt.score,
+                            },
                         },
                     });
                 }
@@ -314,6 +344,10 @@ export async function scopedVectorSearch(
                 qdrantErrors.push(qErr);
             }
         }
+
+        rawResults.push(
+            ...selectGroundedCandidates(groupCandidates).map((candidate) => candidate.result),
+        );
     }
 
     // If Qdrant failed completely with errors
@@ -352,7 +386,7 @@ export async function scopedVectorSearch(
     }
 
     // 5. Deduplicate, sort, and slice to limit
-    return deduplicateAndRankResults(rawResults, limit);
+    return deduplicateAndRankVectorResults(rawResults, limit);
 }
 
 /**
