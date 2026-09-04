@@ -175,7 +175,7 @@ export async function scopedVectorSearch(
     const validSources: SourceWithModel[] = sources
         .filter((s) => s.collectionName && s.collectionName.trim().length > 0)
         .map((s) => {
-            const model = s.embeddingModel || input.embeddingModel || "openai/text-embedding-3-small";
+            const model = s.embeddingModel || process.env.EMBEDDING_MODEL || input.embeddingModel || "openai/text-embedding-3-small";
             const dimensions = s.embeddingDimensions || getEmbeddingDimensionsForModel(model);
             return {
                 id: s.id,

@@ -20,6 +20,14 @@ const validateEnv = (): void => {
 
     // Check base required variables
     for (const key of baseRequiredEnvVars) {
+        if (key === "OPENROUTER_LLM_API_KEY" || key === "OPENROUTER_EMBEDDING_API_KEY") {
+            const hasOpenRouter = (process.env[key] !== undefined && process.env[key]!.trim() !== "");
+            const hasOpenAI = (process.env.OPENAI_API_KEY !== undefined && process.env.OPENAI_API_KEY.trim() !== "");
+            if (!hasOpenRouter && !hasOpenAI) {
+                missing.push(`${key} (or OPENAI_API_KEY)`);
+            }
+            continue;
+        }
         const value = process.env[key];
         if (value === undefined || value.trim() === "") {
             missing.push(key);

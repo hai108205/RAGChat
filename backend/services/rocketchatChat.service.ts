@@ -58,10 +58,11 @@ function getLLMClient(): OpenAI {
     }
 
     const apiKey =
-        process.env.OPENROUTER_LLM_API_KEY ||
         process.env.OPENAI_API_KEY ||
+        process.env.OPENROUTER_LLM_API_KEY ||
         "dummy_key_for_test";
     const baseURL =
+        process.env.OPENAI_BASE_URL ||
         process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
 
     return new OpenAI({

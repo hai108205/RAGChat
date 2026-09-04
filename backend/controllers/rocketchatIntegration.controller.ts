@@ -359,7 +359,7 @@ async function retrieveRelevantSources(
     const sourcesByModel = new Map<string, any[]>();
     for (const source of chat.chatSources) {
         if (!source.collectionName) continue;
-        const srcModel = source.embeddingModel || embeddingModel || "openai/text-embedding-3-small";
+        const srcModel = source.embeddingModel || process.env.EMBEDDING_MODEL || embeddingModel || "openai/text-embedding-3-small";
         if (!sourcesByModel.has(srcModel)) {
             sourcesByModel.set(srcModel, []);
         }

@@ -15,14 +15,15 @@ const domainLimiters = new Map<string, Bottleneck>();
 let openai: OpenAI | undefined;
 
 function getOpenAIClient(): OpenAI {
-    if (!process.env.OPENROUTER_EMBEDDING_API_KEY) {
-        throw new Error("OPENROUTER_EMBEDDING_API_KEY is required to generate vector embeddings.");
+    const apiKey = process.env.OPENAI_API_KEY || process.env.OPENROUTER_EMBEDDING_API_KEY;
+    if (!apiKey) {
+        throw new Error("OPENROUTER_EMBEDDING_API_KEY or OPENAI_API_KEY is required to generate vector embeddings.");
     }
 
     if (!openai) {
         openai = new OpenAI({
-            baseURL: "https://openrouter.ai/api/v1",
-            apiKey: process.env.OPENROUTER_EMBEDDING_API_KEY,
+            baseURL: process.env.OPENAI_BASE_URL || process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
+            apiKey: apiKey,
         });
     }
 
@@ -72,7 +73,7 @@ export interface EmbeddingOptions {
 }
 
 function getEmbeddingDimensionsForModel(model?: string): number {
-    if (model === "openai/text-embedding-3-large") {
+    if (model && model.includes("text-embedding-3-large")) {
         return 3072;
     }
     return 1536;
@@ -82,7 +83,7 @@ async function generateVectorEmbeddings(
     input: string | string[],
     options?: EmbeddingOptions | string,
 ): Promise<number[] | number[][]> {
-    const model = typeof options === "string" ? options : options?.model || "openai/text-embedding-3-small";
+    const model = typeof options === "string" ? options : options?.model || process.env.EMBEDDING_MODEL || "openai/text-embedding-3-small";
     const dimensions =
         typeof options === "object" && options?.dimensions
             ? options.dimensions
