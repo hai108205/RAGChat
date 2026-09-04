@@ -7,6 +7,10 @@ type ScoredCandidate = {
     score: unknown;
 };
 
+type GroundedCandidateOptions = {
+    minimumScore?: unknown;
+};
+
 type SourceWithVectorMetadata = {
     collectionName: unknown;
     isVectorLess: unknown;
@@ -43,11 +47,15 @@ export function normalizedTermFrequency(text: unknown, queryTerms: readonly unkn
     return terms.reduce((total, term) => total + (frequencies.get(term) ?? 0), 0);
 }
 
-export function selectGroundedCandidates<T extends ScoredCandidate>(candidates: readonly T[]): T[] {
+export function selectGroundedCandidates<T extends ScoredCandidate>(
+    candidates: readonly T[],
+    options: GroundedCandidateOptions = {},
+): T[] {
+    const minimumScore = clampedCosineScore(options.minimumScore) ?? MINIMUM_COSINE_SCORE;
     const validCandidates = candidates
         .map((candidate, index) => ({ candidate, index, score: clampedCosineScore(candidate.score) }))
         .filter((entry): entry is { candidate: T; index: number; score: number } => entry.score !== null)
-        .filter((entry) => entry.score >= MINIMUM_COSINE_SCORE)
+        .filter((entry) => entry.score >= minimumScore)
         .sort((left, right) => right.score - left.score || left.index - right.index);
 
     const bestScore = validCandidates[0]?.score;
