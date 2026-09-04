@@ -115,6 +115,25 @@ describe("Regression Test Suite 3: Standardized Observability & Logging", () => 
 
             expect(requestId).toMatch(/^ask-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
         });
+
+        it("does not depend on the Web Crypto global omitted by the Apps-Engine sandbox", () => {
+            const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+
+            Object.defineProperty(globalThis, "crypto", {
+                configurable: true,
+                value: undefined,
+            });
+
+            try {
+                expect(createRequestId("ask")).toMatch(/^ask-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+            } finally {
+                if (originalCrypto) {
+                    Object.defineProperty(globalThis, "crypto", originalCrypto);
+                } else {
+                    delete (globalThis as { crypto?: Crypto }).crypto;
+                }
+            }
+        });
     });
 
     describe("2. Sensitive Data Redaction & Sanitization", () => {
