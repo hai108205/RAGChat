@@ -707,9 +707,11 @@ describe("Rocket.Chat Integration Router", () => {
             expect(res.status).toBe(202);
 
             // Wait for background async task to complete
-            await new Promise((resolve) => setTimeout(resolve, 300));
+            await vi.waitFor(() => {
+                if (!callbackBody) throw new Error("callbackBody not set yet");
+            }, { timeout: 2000 });
 
-            expect(callbackBody).toBeDefined();
+            expect(callbackBody).not.toBeNull();
             expect(callbackBody.event).toBe("chat_completed");
             expect(callbackBody.chat_message_id).toBe("msg-cb-123");
             expect(callbackBody.request_id).toBe("req-cb-test");
