@@ -27,6 +27,31 @@ describe("retrieveWebChatSources", () => {
         expect(result.map((point) => point.id)).toEqual(["eligible-point"]);
     });
 
+    it("queries a shared eligible collection once and returns each retrieved point once", async () => {
+        const query = vi.fn().mockResolvedValue({
+            points: [{ id: "shared-point", score: 0.8, payload: { body: "Aurora deployment" } }],
+        });
+
+        const result = await retrieveWebChatSources({
+            query: "Aurora deployment",
+            sources: [
+                { collectionName: "shared-collection", isVectorLess: false },
+                { collectionName: "shared-collection", isVectorLess: false },
+            ],
+            dependencies: {
+                generateEmbedding: vi.fn().mockResolvedValue([0.1, 0.2]),
+                qdrant: { query },
+            },
+        });
+
+        expect(query).toHaveBeenCalledTimes(1);
+        expect(query).toHaveBeenCalledWith(
+            "shared-collection",
+            expect.objectContaining({ query: [0.1, 0.2] }),
+        );
+        expect(result.map((point) => point.id)).toEqual(["shared-point"]);
+    });
+
     it("grounds each source before lexical reranking and RRF fusion", async () => {
         const query = vi.fn().mockImplementation(async (collectionName: string) => ({
             points:

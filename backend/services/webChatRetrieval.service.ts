@@ -63,17 +63,22 @@ export async function retrieveWebChatSources({
     sources,
     dependencies,
 }: WebChatRetrievalInput): Promise<WebChatRetrievedPoint[]> {
-    const eligibleSources = sources
-        .map((source, sourceIndex) => ({ source, sourceIndex }))
-        .filter(({ source }) => isVectorEligibleSource(source));
+    const eligibleSources = new Map<string, { collectionName: string; sourceIndex: number }>();
+    for (const [sourceIndex, source] of sources.entries()) {
+        if (!isVectorEligibleSource(source)) continue;
 
-    if (eligibleSources.length === 0) return [];
+        const collectionName = source.collectionName!.trim();
+        if (!eligibleSources.has(collectionName)) {
+            eligibleSources.set(collectionName, { collectionName, sourceIndex });
+        }
+    }
+
+    if (eligibleSources.size === 0) return [];
 
     const embedding = await dependencies.generateEmbedding(query);
     const approvedCandidates: Candidate[] = [];
 
-    for (const { source, sourceIndex } of eligibleSources) {
-        const collectionName = source.collectionName!.trim();
+    for (const { collectionName, sourceIndex } of eligibleSources.values()) {
         const response = await dependencies.qdrant.query(collectionName, {
             query: embedding,
             limit: 10,
@@ -84,7 +89,7 @@ export async function retrieveWebChatSources({
 
         for (const point of sourceCandidates) {
             approvedCandidates.push({
-                key: `${sourceIndex}:${String(point.id)}`,
+                key: JSON.stringify([collectionName, point.id]),
                 point,
                 sourceIndex,
             });
