@@ -15,6 +15,8 @@ import OpenAI from "openai";
 import { qdrant, treeindex } from "../utils/ragClients.js";
 import { decryptApiKey } from "../utils/decrypt.js";
 import { generateVectorEmbeddings } from "../utils/ragUtilities.js";
+import { getEmbeddingDimensionsForModel } from "../utils/ragUtilities.js";
+import { searchWebRagV1 } from "../rag/retrieval.js";
 import { buildMessagesForLLM } from "../utils/contextBuilder.js";
 import { MemoryClient } from "mem0ai";
 import PDFDocument from "pdfkit";
@@ -173,14 +175,57 @@ const sendMessage = asyncHandler(async (req: Request, res: Response) => {
     let relevantSources: any[] = [];
     const relevantNodes: any[] = [];
 
-    relevantSources = await retrieveWebChatSources({
-        query: userPrompt,
-        sources: chat.chatSources,
-        dependencies: {
-            generateEmbedding: async (query) => (await generateVectorEmbeddings(query)) as number[],
-            qdrant: { query: (collectionName, request) => qdrant.query(collectionName, request) as any },
-        },
-    });
+    const useRagV1 = config.rag?.v1Enabled === true;
+    if (useRagV1) {
+        const embeddingModel = config.llm.embeddingModel;
+        const dimensions = getEmbeddingDimensionsForModel(embeddingModel);
+        try {
+            const v1 = await searchWebRagV1({
+                query: userPrompt,
+                chatId,
+                indexVersion: config.rag.indexVersion,
+                embeddingModel,
+                dimensions,
+                limit: config.rag.retrievalCandidateLimit,
+                minScore: 0.3,
+            }, { prisma, embed: generateVectorEmbeddings, qdrant });
+            relevantSources = v1.map((result) => ({
+                id: result.metadata.chunkId || result.metadata.documentId,
+                score: result.relevance,
+                payload: { body: result.snippet, title: result.title, url: result.pageUrl, ...result.metadata },
+            }));
+            const shouldReadLegacy = config.rag.dualReadEnabled || (relevantSources.length === 0 && config.rag.allowLegacyAvailabilityFallback);
+            if (shouldReadLegacy) {
+                relevantSources = [...relevantSources, ...await retrieveWebChatSources({
+                    query: userPrompt,
+                    sources: chat.chatSources,
+                    dependencies: {
+                        generateEmbedding: async (query) => (await generateVectorEmbeddings(query)) as number[],
+                        qdrant: { query: (collectionName, request) => qdrant.query(collectionName, request) as any },
+                    },
+                })];
+            }
+        } catch (error) {
+            if (!config.rag.allowLegacyAvailabilityFallback) throw error;
+            relevantSources = await retrieveWebChatSources({
+                query: userPrompt,
+                sources: chat.chatSources,
+                dependencies: {
+                    generateEmbedding: async (query) => (await generateVectorEmbeddings(query)) as number[],
+                    qdrant: { query: (collectionName, request) => qdrant.query(collectionName, request) as any },
+                },
+            });
+        }
+    } else {
+        relevantSources = await retrieveWebChatSources({
+            query: userPrompt,
+            sources: chat.chatSources,
+            dependencies: {
+                generateEmbedding: async (query) => (await generateVectorEmbeddings(query)) as number[],
+                qdrant: { query: (collectionName, request) => qdrant.query(collectionName, request) as any },
+            },
+        });
+    }
 
     let systemInstructions = "You are a documentation-grounded assistant. \n";
     if (relevantSources.length || relevantNodes.length) {

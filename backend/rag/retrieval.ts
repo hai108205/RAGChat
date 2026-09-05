@@ -113,3 +113,10 @@ export async function searchRagV1(
         }];
     }).sort((a: RagV1SearchResult, b: RagV1SearchResult) => b.relevance - a.relevance).slice(0, input.limit);
 }
+
+export async function searchWebRagV1(
+    input: { query: string; chatId: string; indexVersion: string; embeddingModel: string; dimensions: number; limit: number; minScore?: number },
+    deps: RagV1SearchDependencies,
+): Promise<RagV1SearchResult[]> {
+    return searchRagV1({ ...input, scope: { kind: "web", chatId: input.chatId } }, deps);
+}
