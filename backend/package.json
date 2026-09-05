@@ -11,6 +11,7 @@
         "worker": "tsx chatWorker.ts",
         "worker:integration": "tsx workers/rocketchatIntegrationWorker.ts",
         "rag:backfill": "tsx scripts/backfillRagV1.ts",
+        "rag:evaluate-quality": "tsx scripts/evaluateRagQuality.ts",
         "test": "vitest",
         "test:ci": "vitest run",
         "test:contract": "vitest run tests/integration/rocketchat.integration.test.ts",
@@ -27,6 +28,7 @@
     "type": "module",
     "dependencies": {
         "@langchain/core": "^1.1.36",
+        "@langchain/openai": "1.1.3",
         "@langchain/textsplitters": "^1.0.1",
         "@prisma/adapter-pg": "^7.5.0",
         "@prisma/client": "^7.5.0",

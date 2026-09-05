@@ -87,7 +87,18 @@ export async function searchRagV1(
         score_threshold: input.minScore ?? 0,
         filter: buildRagScopeFilter(input.scope),
     });
-    const manifestById = new Map(manifests.map((manifest) => [manifest.id, manifest]));
+    // A source can have several ACTIVE manifests transiently while a re-index is
+    // being migrated. The database query is newest-first, so retain only the
+    // latest active version for each source and never surface stale chunks.
+    const latestManifestBySource = new Map<string, Manifest>();
+    for (const manifest of manifests) {
+        if (!latestManifestBySource.has(manifest.chatSourceId)) {
+            latestManifestBySource.set(manifest.chatSourceId, manifest);
+        }
+    }
+    const manifestById = new Map(
+        [...latestManifestBySource.values()].map((manifest) => [manifest.id, manifest]),
+    );
     const seen = new Set<string>();
     return (response?.points ?? []).flatMap((point: any) => {
         const payload = (point.payload ?? {}) as Record<string, any>;
@@ -112,6 +123,22 @@ export async function searchRagV1(
             },
         }];
     }).sort((a: RagV1SearchResult, b: RagV1SearchResult) => b.relevance - a.relevance).slice(0, input.limit);
+}
+
+export type LegacyFallbackReason = "DUAL_READ" | "V1_COVERAGE_GAP" | "V1_RUNTIME_FAILURE";
+
+export function resolveLegacyReadDecision(input: {
+    v1ResultCount: number;
+    dualReadEnabled: boolean;
+    allowAvailabilityFallback: boolean;
+    v1Failed?: boolean;
+}): { shouldReadLegacy: boolean; reason?: LegacyFallbackReason } {
+    if (input.dualReadEnabled) return { shouldReadLegacy: true, reason: "DUAL_READ" };
+    if (!input.allowAvailabilityFallback) return { shouldReadLegacy: false };
+    if (input.v1Failed) return { shouldReadLegacy: true, reason: "V1_RUNTIME_FAILURE" };
+    return input.v1ResultCount === 0
+        ? { shouldReadLegacy: true, reason: "V1_COVERAGE_GAP" }
+        : { shouldReadLegacy: false };
 }
 
 export async function searchWebRagV1(

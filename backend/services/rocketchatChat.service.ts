@@ -10,7 +10,8 @@ import {
 import { scopedVectorSearch } from "./scopedVectorSearch.js";
 import { sendRocketChatCallback } from "../controllers/rocketchatIntegration.controller.js";
 import { config } from "../config/runtime.js";
-import { buildRagContext, rewriteConversationalQuery } from "../rag/context.js";
+import { buildRagContext } from "../rag/context.js";
+import { rewriteQueryWithStructuredOutput } from "../rag/queryRewrite.js";
 import { startRagTrace } from "../rag/telemetry.js";
 
 export interface RocketChatChatPayload {
@@ -112,7 +113,19 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
         });
 
         // 1. Rewrite only the retrieval query; preserve the original user message for the answer.
-        const retrievalQuery = rewriteConversationalQuery(query, history);
+        // The structured result is validated with Zod and deliberately falls back to the original query.
+        const queryRewrite = await trace.stage("QUERY_REWRITE", () => rewriteQueryWithStructuredOutput({ query, history }));
+        if (queryRewrite.rewritten || queryRewrite.fallbackReason) {
+            logger.debug?.(
+                {
+                    requestId,
+                    rewritten: queryRewrite.rewritten,
+                    fallbackReason: queryRewrite.fallbackReason,
+                },
+                "RAG retrieval query rewrite completed",
+            );
+        }
+        const retrievalQuery = queryRewrite.query;
         const searchResults = await trace.stage("RETRIEVAL", () => scopedVectorSearch({
             query: retrievalQuery,
             workspaceId,

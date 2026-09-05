@@ -57,4 +57,47 @@ describe("contextBuilder", () => {
         );
         expect(totalTokens).toBeLessThanOrEqual(250);
     });
+
+    it("builds deterministic, source-labelled context and removes duplicate v1 chunks", () => {
+        const messages = buildMessagesForLLM({
+            systemInstructions: "Ground answers in the context.",
+            relevantSources: [
+                {
+                    score: 0.6,
+                    payload: {
+                        chunk_id: "second",
+                        title: "Second document",
+                        url: "https://example.test/second",
+                        body: "Second excerpt.",
+                    },
+                },
+                {
+                    score: 0.9,
+                    payload: {
+                        chunk_id: "first",
+                        title: "First document",
+                        url: "https://example.test/first",
+                        page: 3,
+                        body: "First excerpt.",
+                    },
+                },
+                {
+                    score: 0.8,
+                    payload: {
+                        chunk_id: "first",
+                        title: "Duplicate",
+                        body: "Duplicate excerpt.",
+                    },
+                },
+            ],
+            userPrompt: "What does the documentation say?",
+            budget: { total: 200, sources: 120 },
+        });
+
+        const system = messages[0].content;
+        expect(system).toContain("[1] First document (https://example.test/first) - page 3");
+        expect(system).toContain("[2] Second document (https://example.test/second)");
+        expect(system).not.toContain("Duplicate excerpt.");
+        expect(system.indexOf("First excerpt.")).toBeLessThan(system.indexOf("Second excerpt."));
+    });
 });

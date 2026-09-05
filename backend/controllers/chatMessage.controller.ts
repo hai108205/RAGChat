@@ -16,7 +16,9 @@ import { qdrant, treeindex } from "../utils/ragClients.js";
 import { decryptApiKey } from "../utils/decrypt.js";
 import { generateVectorEmbeddings } from "../utils/ragUtilities.js";
 import { getEmbeddingDimensionsForModel } from "../utils/ragUtilities.js";
-import { searchWebRagV1 } from "../rag/retrieval.js";
+import { resolveLegacyReadDecision, searchWebRagV1 } from "../rag/retrieval.js";
+import { rewriteQueryWithStructuredOutput } from "../rag/queryRewrite.js";
+import logger from "../utils/logger.js";
 import { buildMessagesForLLM } from "../utils/contextBuilder.js";
 import { MemoryClient } from "mem0ai";
 import PDFDocument from "pdfkit";
@@ -128,6 +130,27 @@ const sendMessage = asyncHandler(async (req: Request, res: Response) => {
             "Chat ingestion failed. Please re-ingest the documentation or check the docs URL and try again.",
         );
     }
+    const messages = await prisma.chatMessage.findMany({
+        where: { chatId },
+        take: -40,
+        orderBy: { createdAt: "asc" },
+    });
+    const conversationalHistory = messages.flatMap((message) => [
+        ...(message.userPrompt ? [{ role: "user", content: message.userPrompt }] : []),
+        ...(message.llmResponse ? [{ role: "assistant", content: message.llmResponse }] : []),
+    ]);
+    const queryRewrite = await rewriteQueryWithStructuredOutput({
+        query: userPrompt,
+        history: conversationalHistory,
+    });
+    if (queryRewrite.rewritten || queryRewrite.fallbackReason) {
+        logger.debug({
+            chatId,
+            rewritten: queryRewrite.rewritten,
+            fallbackReason: queryRewrite.fallbackReason,
+        }, "Web RAG retrieval query rewrite completed");
+    }
+    const retrievalQuery = queryRewrite.query;
     let openai: OpenAI;
     let modelId = model;
     let apiKeyId: string | null = null;
@@ -181,7 +204,7 @@ const sendMessage = asyncHandler(async (req: Request, res: Response) => {
         const dimensions = getEmbeddingDimensionsForModel(embeddingModel);
         try {
             const v1 = await searchWebRagV1({
-                query: userPrompt,
+                query: retrievalQuery,
                 chatId,
                 indexVersion: config.rag.indexVersion,
                 embeddingModel,
@@ -194,31 +217,51 @@ const sendMessage = asyncHandler(async (req: Request, res: Response) => {
                 score: result.relevance,
                 payload: { body: result.snippet, title: result.title, url: result.pageUrl, ...result.metadata },
             }));
-            const shouldReadLegacy = config.rag.dualReadEnabled || (relevantSources.length === 0 && config.rag.allowLegacyAvailabilityFallback);
-            if (shouldReadLegacy) {
-                relevantSources = [...relevantSources, ...await retrieveWebChatSources({
-                    query: userPrompt,
+            const legacyDecision = resolveLegacyReadDecision({
+                v1ResultCount: relevantSources.length,
+                dualReadEnabled: config.rag.dualReadEnabled,
+                allowAvailabilityFallback: config.rag.allowLegacyAvailabilityFallback,
+            });
+            if (legacyDecision.shouldReadLegacy) {
+                logger.info({ ragEvent: legacyDecision.reason, chatId, queryLength: userPrompt.length, v1ResultCount: relevantSources.length }, "Web RAG v1 legacy-read policy activated");
+                const legacyResults = await retrieveWebChatSources({
+                    query: retrievalQuery,
                     sources: chat.chatSources,
                     dependencies: {
                         generateEmbedding: async (query) => (await generateVectorEmbeddings(query)) as number[],
                         qdrant: { query: (collectionName, request) => qdrant.query(collectionName, request) as any },
                     },
-                })];
+                });
+                relevantSources = [...relevantSources, ...legacyResults.map((point) => ({
+                    ...point,
+                    payload: { ...point.payload, legacy_fallback_reason: legacyDecision.reason },
+                }))];
             }
         } catch (error) {
-            if (!config.rag.allowLegacyAvailabilityFallback) throw error;
-            relevantSources = await retrieveWebChatSources({
-                query: userPrompt,
+            const legacyDecision = resolveLegacyReadDecision({
+                v1ResultCount: 0,
+                dualReadEnabled: false,
+                allowAvailabilityFallback: config.rag.allowLegacyAvailabilityFallback,
+                v1Failed: true,
+            });
+            if (!legacyDecision.shouldReadLegacy) throw error;
+            logger.warn({ ragEvent: legacyDecision.reason, chatId, queryLength: userPrompt.length }, "Web RAG v1 failed; using explicitly enabled legacy availability fallback");
+            const legacyResults = await retrieveWebChatSources({
+                query: retrievalQuery,
                 sources: chat.chatSources,
                 dependencies: {
                     generateEmbedding: async (query) => (await generateVectorEmbeddings(query)) as number[],
                     qdrant: { query: (collectionName, request) => qdrant.query(collectionName, request) as any },
                 },
             });
+            relevantSources = legacyResults.map((point) => ({
+                ...point,
+                payload: { ...point.payload, legacy_fallback_reason: legacyDecision.reason },
+            }));
         }
     } else {
         relevantSources = await retrieveWebChatSources({
-            query: userPrompt,
+            query: retrievalQuery,
             sources: chat.chatSources,
             dependencies: {
                 generateEmbedding: async (query) => (await generateVectorEmbeddings(query)) as number[],
@@ -248,12 +291,6 @@ const sendMessage = asyncHandler(async (req: Request, res: Response) => {
             console.error("Mem0 search error (non-fatal):", error?.message || error);
         }
     }
-
-    const messages = await prisma.chatMessage.findMany({
-        where: { chatId },
-        take: -40,
-        orderBy: { createdAt: "asc" },
-    });
 
     const messagesForLLM = buildMessagesForLLM({
         systemInstructions,

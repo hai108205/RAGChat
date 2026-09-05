@@ -16,7 +16,7 @@ import {
 } from "../utils/rocketchatScope.js";
 import { selectGroundedCandidates } from "../utils/retrievalQuality.js";
 import { createRagScope } from "../rag/types.js";
-import { searchRagV1 } from "../rag/retrieval.js";
+import { resolveLegacyReadDecision, searchRagV1 } from "../rag/retrieval.js";
 
 export interface ScopedVectorSearchInput {
     query: string;
@@ -174,10 +174,27 @@ export async function scopedVectorSearch(
                 limit,
                 minScore,
             }, { prisma, embed: generateVectorEmbeddings, qdrant });
-            const shouldReadLegacy = config.rag.dualReadEnabled || (v1Results.length === 0 && config.rag.allowLegacyAvailabilityFallback);
-            if (!shouldReadLegacy) return v1Results;
+            const legacyDecision = resolveLegacyReadDecision({
+                v1ResultCount: v1Results.length,
+                dualReadEnabled: config.rag.dualReadEnabled,
+                allowAvailabilityFallback: config.rag.allowLegacyAvailabilityFallback,
+            });
+            if (!legacyDecision.shouldReadLegacy) return v1Results;
+            logger.info({
+                ragEvent: legacyDecision.reason,
+                queryLength: query.length,
+                workspaceId,
+                roomId,
+                v1ResultCount: v1Results.length,
+            }, "RAG v1 legacy-read policy activated");
             const legacyResults = await scopedVectorSearch({ ...input, __skipRagV1: true });
-            const merged = [...v1Results, ...legacyResults];
+            const merged: ScopedSearchResult[] = [
+                ...v1Results,
+                ...legacyResults.map((result) => ({
+                    ...result,
+                    metadata: { ...result.metadata, legacy_fallback_reason: legacyDecision.reason } as Record<string, unknown>,
+                })),
+            ];
             const seen = new Set<string>();
             return merged.filter((item) => {
                 const key = `${item.metadata.chunkId || item.metadata.sourceId || item.pageUrl}::${item.snippet.slice(0, 80)}`;
@@ -187,8 +204,23 @@ export async function scopedVectorSearch(
             }).sort((a, b) => b.relevance - a.relevance).slice(0, limit);
         } catch (error: any) {
             logger.error({ err: error?.message || String(error), queryLength: query.length }, "RAG v1 retrieval failed");
-            if (!config.rag.allowLegacyAvailabilityFallback) throw error;
-            return scopedVectorSearch({ ...input, __skipRagV1: true });
+            const legacyDecision = resolveLegacyReadDecision({
+                v1ResultCount: 0,
+                dualReadEnabled: false,
+                allowAvailabilityFallback: config.rag.allowLegacyAvailabilityFallback,
+                v1Failed: true,
+            });
+            if (!legacyDecision.shouldReadLegacy) throw error;
+            logger.warn({
+                ragEvent: legacyDecision.reason,
+                queryLength: query.length,
+                workspaceId,
+                roomId,
+            }, "RAG v1 failed; using explicitly enabled legacy availability fallback");
+            return (await scopedVectorSearch({ ...input, __skipRagV1: true })).map((result) => ({
+                ...result,
+                metadata: { ...result.metadata, legacy_fallback_reason: legacyDecision.reason } as Record<string, unknown>,
+            }));
         }
     }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { splitIntoSegments } from "../../rag/chunking.js";
+import { splitIntoSegments, splitParsedDocumentSegments } from "../../rag/chunking.js";
 
 describe("type-aware chunking", () => {
     it("preserves markdown heading metadata and removes duplicate/empty segments", async () => {
@@ -21,5 +21,18 @@ describe("type-aware chunking", () => {
         });
         expect(segments.length).toBeGreaterThan(0);
         expect(segments[0].metadata.documentType).toBe("code");
+    });
+
+    it("preserves parser page, slide, or sheet metadata on emitted chunks", async () => {
+        const chunks = await splitParsedDocumentSegments({
+            format: "xlsx",
+            segments: [{
+                content: "--- Sheet: Revenue ---\nQ1,100\nQ2,200",
+                metadata: { documentType: "xlsx", locator: "sheet:Revenue", sheet: "Revenue", segmentIndex: 0 },
+            }],
+        }, { chunkSize: 40, chunkOverlap: 5 });
+        expect(chunks).toEqual(expect.arrayContaining([
+            expect.objectContaining({ metadata: expect.objectContaining({ sheet: "Revenue", locator: "sheet:Revenue" }) }),
+        ]));
     });
 });

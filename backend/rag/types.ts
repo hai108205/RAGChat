@@ -4,6 +4,7 @@ export type RagStage =
     | "CHUNK"
     | "EMBEDDING"
     | "INDEX"
+    | "QUERY_REWRITE"
     | "RETRIEVAL"
     | "CONTEXT"
     | "GENERATION";

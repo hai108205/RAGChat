@@ -30,7 +30,7 @@ import { createIngestionDedupeKey } from "../rag/documentIdentity.js";
 import { createRagScope } from "../rag/types.js";
 import { indexRagDocumentV1 } from "../rag/ingestion.js";
 import { getRagCollectionName, ensureRagCollection } from "../rag/qdrantIndex.service.js";
-import { splitIntoSegments } from "../rag/chunking.js";
+import { splitParsedDocumentSegments } from "../rag/chunking.js";
 
 export interface Base64IngestionInput {
     workspaceId?: string;
@@ -132,14 +132,14 @@ export async function ingestBase64Document(
         });
     }
     const ragSegments = useRagV1
-        ? await splitIntoSegments({
-            text: parsed.text,
-            documentType: parsed.format === "md" ? "markdown" : "plain",
-            locator: normalizedFilename,
-            options: {
-                chunkSize: config.rag.chunkSizeTokens * 4,
-                chunkOverlap: config.rag.chunkOverlapTokens * 4,
-            },
+        ? await splitParsedDocumentSegments({
+            format: parsed.format,
+            segments: parsed.segments?.length
+                ? parsed.segments
+                : [{ content: parsed.text, metadata: { locator: normalizedFilename } }],
+        }, {
+            chunkSize: config.rag.chunkSizeTokens * 4,
+            chunkOverlap: config.rag.chunkOverlapTokens * 4,
         })
         : [];
     if (useRagV1 && ragSegments.length === 0) {

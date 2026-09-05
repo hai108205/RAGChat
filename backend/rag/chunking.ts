@@ -50,3 +50,25 @@ export async function splitIntoSegments(input: {
         };
     }));
 }
+
+function toRagDocumentType(format: string): DocumentType {
+    if (format === "md") return "markdown";
+    if (format === "html") return "html";
+    if (["pdf", "docx", "pptx", "xlsx"].includes(format)) return format as DocumentType;
+    return "plain";
+}
+
+export async function splitParsedDocumentSegments(input: {
+    format: string;
+    segments: readonly { content: string; metadata: Record<string, unknown> }[];
+}, options: ChunkingOptions): Promise<DocumentSegment[]> {
+    const documentType = toRagDocumentType(input.format);
+    const chunks = await Promise.all(input.segments.map((segment) => splitIntoSegments({
+        text: segment.content,
+        documentType,
+        locator: typeof segment.metadata.locator === "string" ? segment.metadata.locator : "document",
+        metadata: segment.metadata,
+        options,
+    })));
+    return validateSegments(chunks.flat());
+}

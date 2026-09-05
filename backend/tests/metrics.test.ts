@@ -126,6 +126,7 @@ let mockRedisStore: {
 // Import metrics after patching and mocking
 const { checkHealth, recordIngestionJobDuration, getPrometheusMetrics } =
     await import("../utils/metrics.js");
+const { recordRagStageDuration } = await import("../rag/telemetry.js");
 
 // Reset the singleton methods in the teardown block to prevent polluting other test files
 afterAll(() => {
@@ -172,4 +173,13 @@ test("metrics getPrometheusMetrics output formatting with recorded data", async 
 
     assert.match(metricsStr, /ingestion_job_duration_seconds_sum 16\.7/);
     assert.match(metricsStr, /ingestion_job_duration_seconds_count 2/);
+});
+
+test("metrics exposes bounded RAG stage latency labels", async () => {
+    recordRagStageDuration("RETRIEVAL", "success", 0.12);
+    recordRagStageDuration("GENERATION", "error", 1.25);
+
+    const metricsStr = await getPrometheusMetrics();
+    assert.match(metricsStr, /rag_stage_duration_seconds_bucket\{le="0.25",stage="RETRIEVAL",outcome="success"\} 1/);
+    assert.match(metricsStr, /rag_stage_duration_seconds_bucket\{le="2.5",stage="GENERATION",outcome="error"\} 1/);
 });
