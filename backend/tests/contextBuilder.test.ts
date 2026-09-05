@@ -16,13 +16,13 @@ describe("contextBuilder", () => {
         expect(truncated.endsWith("...")).toBe(true);
     });
 
-    it("assembles system context sections and keeps total prompt within budget", () => {
+    it("assembles system context sections and keeps total prompt within budget", async () => {
         const history = Array.from({ length: 12 }, (_, index) => ({
             userPrompt: `Question ${index + 1} with some extra text`,
             llmResponse: `Answer ${index + 1} with extended explanation`,
         }));
 
-        const messages = buildMessagesForLLM({
+        const messages = await buildMessagesForLLM({
             systemInstructions: "System base instructions.",
             relevantSources: [
                 {
@@ -56,5 +56,58 @@ describe("contextBuilder", () => {
             0,
         );
         expect(totalTokens).toBeLessThanOrEqual(250);
+    });
+
+    it("builds deterministic, source-labelled context and removes duplicate v1 chunks", async () => {
+        const messages = await buildMessagesForLLM({
+            systemInstructions: "Ground answers in the context.",
+            relevantSources: [
+                {
+                    score: 0.6,
+                    payload: {
+                        chunk_id: "second",
+                        title: "Second document",
+                        url: "https://example.test/second",
+                        body: "Second excerpt.",
+                    },
+                },
+                {
+                    score: 0.9,
+                    payload: {
+                        chunk_id: "first",
+                        title: "First document",
+                        url: "https://example.test/first",
+                        page: 3,
+                        body: "First excerpt.",
+                    },
+                },
+                {
+                    score: 0.8,
+                    payload: {
+                        chunk_id: "first",
+                        title: "Duplicate",
+                        body: "Duplicate excerpt.",
+                    },
+                },
+            ],
+            userPrompt: "What does the documentation say?",
+            budget: { total: 200, sources: 120 },
+        });
+
+        const system = messages[0].content;
+        expect(system).toContain("[1] First document (https://example.test/first) - page 3");
+        expect(system).toContain("[2] Second document (https://example.test/second)");
+        expect(system).not.toContain("Duplicate excerpt.");
+        expect(system.indexOf("First excerpt.")).toBeLessThan(system.indexOf("Second excerpt."));
+    });
+
+    it("does not send an orphan assistant message as the start of the history window", async () => {
+        const messages = await buildMessagesForLLM({
+            systemInstructions: "Ground answers in the context.",
+            history: [{ llmResponse: "orphan answer" }],
+            userPrompt: "Current question",
+        });
+
+        expect(messages.map((message) => message.role)).toEqual(["system", "user"]);
     });
 });

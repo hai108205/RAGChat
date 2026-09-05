@@ -4,12 +4,7 @@ import prisma from "./prismaClient.js";
 import redis from "./redis.js";
 import { getChatCreationQueue } from "./queue.js";
 import { config } from "../config/runtime.js";
-
-// Initialize prom-client Registry
-const registry = new client.Registry();
-
-// Collect default Node.js process metrics
-client.collectDefaultMetrics({ register: registry });
+import { prometheusRegistry as registry } from "./prometheusRegistry.js";
 
 // Express API request latency histogram
 const httpRequestDuration = new client.Histogram({

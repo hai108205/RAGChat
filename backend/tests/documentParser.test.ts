@@ -158,6 +158,17 @@ describe("Document Parser Service", () => {
             expect(result.text).toContain("Bold text here");
         });
 
+        it("emits heading-aware structural segments for Markdown without changing text", async () => {
+            const result = await parseDocument(Buffer.from("# Intro\nText\n\n## Details\nMore text"), {
+                filename: "sections.md",
+            });
+            expect(result.text).toContain("More text");
+            expect(result.segments).toEqual(expect.arrayContaining([
+                expect.objectContaining({ metadata: expect.objectContaining({ heading: "Intro" }) }),
+                expect.objectContaining({ metadata: expect.objectContaining({ heading: "Intro > Details" }) }),
+            ]));
+        });
+
         it("parses .csv correctly and extracts sentinel text", async () => {
             const buf = loadFixture("sample.csv");
             const result = await parseDocument(buf, { filename: "sample.csv" });
@@ -200,6 +211,7 @@ describe("Document Parser Service", () => {
             expect(result.text).toContain("SENTINEL_PARSER_TEST_CONTENT_PPTX");
             expect(result.text).toContain("Presentation slide notes & details");
             expect(result.metadata.slideCount).toBe(1);
+            expect(result.segments?.[0]?.metadata).toMatchObject({ slide: 1, locator: "slide:1" });
         });
 
         it("parses .xlsx correctly and extracts sheet sentinel text", async () => {
@@ -209,6 +221,7 @@ describe("Document Parser Service", () => {
             expect(result.text).toContain("SENTINEL_PARSER_TEST_CONTENT_XLSX");
             expect(result.text).toContain("TestSheet");
             expect(result.metadata.sheetCount).toBe(1);
+            expect(result.segments?.[0]?.metadata).toMatchObject({ sheet: "TestSheet", locator: "sheet:TestSheet" });
         });
     });
 

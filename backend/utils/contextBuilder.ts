@@ -1,3 +1,5 @@
+import { trimHistoryForGeneration } from "../rag/history.js";
+
 export interface ContextBudget {
     total: number;
     sources: number;
@@ -59,8 +61,13 @@ const appendWithinBudget = (
 };
 
 interface SourceItem {
-    label: string;
+    title: string;
     body: string;
+    sourceUrl?: string;
+    locator?: string;
+    identity: string;
+    score: number;
+    order: number;
 }
 
 interface BuildSourceContextInput {
@@ -75,13 +82,34 @@ const buildSourceContext = ({
     budget,
 }: BuildSourceContextInput): string => {
     const sourceItems: SourceItem[] = relevantSources.length
-        ? relevantSources.map((point, index) => ({
-              label: `Source ${index + 1}`,
-              body: point.payload?.body || "",
-          }))
+        ? relevantSources.map((point, index) => {
+              const payload = point.payload || {};
+              const locator = [
+                  payload.heading,
+                  payload.section,
+                  payload.page ? `page ${payload.page}` : undefined,
+                  payload.slide ? `slide ${payload.slide}` : undefined,
+                  payload.sheet ? `sheet ${payload.sheet}` : undefined,
+              ].filter(Boolean).join(" / ") || undefined;
+              const body = payload.body || "";
+              return {
+                  title: payload.title || payload.fileName || payload.file_name || `Source ${index + 1}`,
+                  body,
+                  sourceUrl: payload.url || payload.pageUrl || payload.source,
+                  locator,
+                  identity: String(payload.chunkId || payload.chunk_id || `${payload.documentId || payload.document_id || "source"}|${body.slice(0, 120)}`),
+                  score: Number(point.score ?? point.relevance ?? 0),
+                  order: index,
+              };
+          })
         : relevantNodes.map((node, index) => ({
-              label: node.heading || `Source ${index + 1}`,
+              title: node.heading || `Source ${index + 1}`,
               body: node.data || "",
+              sourceUrl: node.url || node.pageUrl,
+              locator: node.section || undefined,
+              identity: String(node.id || node.chunkId || `${node.url || node.heading || "source"}|${String(node.data || "").slice(0, 120)}`),
+              score: Number(node.score ?? node.relevance ?? 0),
+              order: index,
           }));
 
     if (!sourceItems.length) return "";
@@ -89,11 +117,22 @@ const buildSourceContext = ({
     const lines = ["--- DOCUMENTATION SOURCES ---"];
     const state = { used: estimateTokens(lines[0]) };
 
-    for (const source of sourceItems) {
+    const seen = new Set<string>();
+    const orderedSources = sourceItems
+        .sort((left, right) => right.score - left.score || left.order - right.order)
+        .filter((source) => {
+            if (seen.has(source.identity)) return false;
+            seen.add(source.identity);
+            return true;
+        });
+
+    for (const source of orderedSources) {
         const body = normalizeText(source.body);
         if (!body) continue;
 
-        const added = appendWithinBudget(lines, `${source.label}:\n${body}`, budget, state);
+        const sourceNumber = lines.length;
+        const label = `[${sourceNumber}] ${source.title}${source.sourceUrl ? ` (${source.sourceUrl})` : ""}${source.locator ? ` - ${source.locator}` : ""}`;
+        const added = appendWithinBudget(lines, `${label}:\n${body}`, budget, state);
         if (!added) break;
     }
 
@@ -181,25 +220,12 @@ interface BuildRecentMessagesInput {
     budget: number;
 }
 
-const buildRecentMessages = ({ messages = [], budget }: BuildRecentMessagesInput): LLMMessage[] => {
-    const flattened = toMessagePairs(messages).reverse();
-    const selected: LLMMessage[] = [];
-    let used = 0;
-
-    for (const message of flattened) {
-        const tokens = estimateTokens(message.content);
-        if (used + tokens > budget) {
-            const remaining = budget - used;
-            const content = truncateToTokenBudget(message.content, remaining);
-            if (content) selected.push({ ...message, content });
-            break;
-        }
-
-        selected.push(message);
-        used += tokens;
-    }
-
-    return selected.reverse();
+const buildRecentMessages = async ({ messages = [], budget }: BuildRecentMessagesInput): Promise<LLMMessage[]> => {
+    const trimmed = await trimHistoryForGeneration(toMessagePairs(messages), budget);
+    return trimmed.map((message) => ({
+        role: message.getType() === "human" ? "user" : "assistant",
+        content: String(message.content),
+    }));
 };
 
 const fitMessagesToBudget = (messages: LLMMessage[], totalBudget: number): LLMMessage[] => {
@@ -232,7 +258,7 @@ export interface BuildMessagesForLLMInput {
     budget?: Partial<ContextBudget>;
 }
 
-const buildMessagesForLLM = ({
+const buildMessagesForLLM = async ({
     systemInstructions,
     relevantSources = [],
     relevantNodes = [],
@@ -240,7 +266,7 @@ const buildMessagesForLLM = ({
     history = [],
     userPrompt,
     budget = DEFAULT_CONTEXT_BUDGET,
-}: BuildMessagesForLLMInput): LLMMessage[] => {
+}: BuildMessagesForLLMInput): Promise<LLMMessage[]> => {
     const contextBudget: ContextBudget = { ...DEFAULT_CONTEXT_BUDGET, ...budget };
     const recentMessages = history.slice(-RECENT_TURN_COUNT);
     const summaryMessages = history.slice(0, Math.max(history.length - RECENT_TURN_COUNT, 0));
@@ -257,7 +283,7 @@ const buildMessagesForLLM = ({
         messages: summaryMessages,
         budget: contextBudget.summary,
     });
-    const recentContext = buildRecentMessages({
+    const recentContext = await buildRecentMessages({
         messages: recentMessages,
         budget: contextBudget.recent,
     });

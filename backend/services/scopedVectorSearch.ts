@@ -15,6 +15,8 @@ import {
     type RocketChatScopeFilter,
 } from "../utils/rocketchatScope.js";
 import { selectGroundedCandidates } from "../utils/retrievalQuality.js";
+import { createRagScope } from "../rag/types.js";
+import { resolveLegacyReadDecision, searchRagV1 } from "../rag/retrieval.js";
 
 export interface ScopedVectorSearchInput {
     query: string;
@@ -36,6 +38,10 @@ export interface ScopedVectorSearchInput {
     allowGlobal?: boolean;
     throwOnQdrantError?: boolean;
     fallbackToKeyword?: boolean;
+    /** Restricts a migration legacy read to v1-uncovered source IDs. */
+    legacySourceIds?: readonly string[];
+    /** Internal guard used while reading the legacy index during migration. */
+    __skipRagV1?: boolean;
 }
 
 export interface ScopedSearchResult {
@@ -150,6 +156,88 @@ export async function scopedVectorSearch(
     const allowGlobal = Boolean(input.scope?.allowGlobal ?? input.allowGlobal);
     const throwOnQdrantError = Boolean(input.throwOnQdrantError);
     const fallbackToKeyword = input.fallbackToKeyword !== false;
+    const legacySourceIds = input.legacySourceIds;
+
+    if (config.rag.v1Enabled && !input.__skipRagV1 && mode === "room") {
+        const ragScope = createRagScope({
+            kind: "rocketchat",
+            workspaceId,
+            roomId,
+            threadId,
+        });
+        const profileModel = input.embeddingModel || config.llm.embeddingModel;
+        const profileDimensions = getEmbeddingDimensionsForModel(profileModel);
+        try {
+            const v1 = await searchRagV1({
+                query,
+                scope: ragScope,
+                indexVersion: config.rag.indexVersion,
+                embeddingModel: profileModel,
+                dimensions: profileDimensions,
+                limit,
+                minScore,
+            }, { prisma, embed: generateVectorEmbeddings, qdrant });
+            const legacyCandidates = await prisma.chatSource.findMany({
+                where: {
+                    AND: [
+                        buildChatSourceScopeWhere({ workspaceId, roomId, threadId, mode: "room", allowGlobal: false }),
+                        { collectionName: { not: null } },
+                    ],
+                },
+                select: { id: true },
+            });
+            const uncoveredSourceIds = legacyCandidates
+                .map((source: { id: string }) => source.id)
+                .filter((sourceId: string) => !v1.activeSourceIds.includes(sourceId));
+            const legacyDecision = resolveLegacyReadDecision({
+                uncoveredSourceIds,
+                dualReadEnabled: config.rag.dualReadEnabled,
+                allowAvailabilityFallback: config.rag.allowLegacyAvailabilityFallback,
+            });
+            if (!legacyDecision.shouldReadLegacy) return v1.results;
+            logger.info({
+                ragEvent: legacyDecision.reason,
+                queryLength: query.length,
+                workspaceId,
+                roomId,
+                uncoveredSourceCount: uncoveredSourceIds.length,
+            }, "RAG v1 legacy-read policy activated");
+            const legacyResults = await scopedVectorSearch({ ...input, __skipRagV1: true, legacySourceIds: uncoveredSourceIds });
+            const merged: ScopedSearchResult[] = [
+                ...v1.results,
+                ...legacyResults.map((result) => ({
+                    ...result,
+                    metadata: { ...result.metadata, legacy_fallback_reason: legacyDecision.reason } as Record<string, unknown>,
+                })),
+            ];
+            const seen = new Set<string>();
+            return merged.filter((item) => {
+                const key = `${item.metadata.chunkId || item.metadata.sourceId || item.pageUrl}::${item.snippet.slice(0, 80)}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            }).sort((a, b) => b.relevance - a.relevance).slice(0, limit);
+        } catch (error: any) {
+            logger.error({ err: error?.message || String(error), queryLength: query.length }, "RAG v1 retrieval failed");
+            const legacyDecision = resolveLegacyReadDecision({
+                uncoveredSourceIds: [],
+                dualReadEnabled: false,
+                allowAvailabilityFallback: config.rag.allowLegacyAvailabilityFallback,
+                v1Failed: true,
+            });
+            if (!legacyDecision.shouldReadLegacy) throw error;
+            logger.warn({
+                ragEvent: legacyDecision.reason,
+                queryLength: query.length,
+                workspaceId,
+                roomId,
+            }, "RAG v1 failed; using explicitly enabled legacy availability fallback");
+            return (await scopedVectorSearch({ ...input, __skipRagV1: true })).map((result) => ({
+                ...result,
+                metadata: { ...result.metadata, legacy_fallback_reason: legacyDecision.reason } as Record<string, unknown>,
+            }));
+        }
+    }
 
     // If room mode and no roomId specified, return empty to prevent scope leakage
     if (mode === "room" && !roomId) {
@@ -182,6 +270,7 @@ export async function scopedVectorSearch(
                     {
                         collectionName: { not: null },
                     },
+                    ...(legacySourceIds ? [{ id: { in: [...legacySourceIds] } }] : []),
                 ],
             },
             select: {

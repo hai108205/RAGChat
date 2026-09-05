@@ -53,6 +53,7 @@ export interface ParseDocumentOptions {
 export interface ParsedDocument {
     text: string;
     format: DocumentFormat;
+    segments: ParsedDocumentSegment[];
     metadata: {
         filename?: string;
         contentType?: string;
@@ -63,6 +64,80 @@ export interface ParsedDocument {
         characterCount: number;
         [key: string]: unknown;
     };
+}
+
+export interface ParsedDocumentSegment {
+    content: string;
+    metadata: {
+        documentType: DocumentFormat;
+        locator: string;
+        heading?: string;
+        page?: number;
+        slide?: number;
+        sheet?: string;
+        segmentIndex: number;
+    };
+}
+
+function createStructuralSegments(format: DocumentFormat, text: string): ParsedDocumentSegment[] {
+    const normalized = text.replace(/\r\n/g, "\n").trim();
+    if (!normalized) return [];
+
+    const segment = (content: string, metadata: Omit<ParsedDocumentSegment["metadata"], "documentType" | "segmentIndex">): ParsedDocumentSegment | null => {
+        const trimmed = content.trim();
+        return trimmed ? { content: trimmed, metadata: { documentType: format, segmentIndex: 0, ...metadata } } : null;
+    };
+
+    let segments: ParsedDocumentSegment[] = [];
+    if (format === "md") {
+        const headingStack: string[] = [];
+        let content: string[] = [];
+        let locator = "document";
+        const flush = () => {
+            const next = segment(content.join("\n"), {
+                locator,
+                ...(headingStack.length ? { heading: headingStack.join(" > ") } : {}),
+            });
+            if (next) segments.push(next);
+            content = [];
+        };
+        for (const line of normalized.split("\n")) {
+            const match = line.match(/^(#{1,6})\s+(.+)$/);
+            if (match) {
+                flush();
+                const level = match[1].length;
+                headingStack.splice(level - 1);
+                headingStack[level - 1] = match[2].trim();
+                locator = `heading:${headingStack.join(" > ")}`;
+            }
+            content.push(line);
+        }
+        flush();
+    } else if (format === "pptx") {
+        const parts = normalized.split(/(?=--- Slide \d+ ---)/g);
+        segments = parts.flatMap((part) => {
+            const slide = part.match(/^--- Slide (\d+) ---/)?.[1];
+            return segment(part, { locator: `slide:${slide || "1"}`, ...(slide ? { slide: Number(slide) } : {}) }) ?? [];
+        });
+    } else if (format === "xlsx") {
+        const parts = normalized.split(/(?=--- Sheet: .+? ---)/g);
+        segments = parts.flatMap((part) => {
+            const sheet = part.match(/^--- Sheet: (.+?) ---/)?.[1]?.trim();
+            return segment(part, { locator: `sheet:${sheet || "unknown"}`, ...(sheet ? { sheet } : {}) }) ?? [];
+        });
+    } else if (format === "pdf") {
+        segments = normalized.split("\f").flatMap((part, index) =>
+            segment(part, { locator: `page:${index + 1}`, page: index + 1 }) ?? [],
+        );
+    } else {
+        const next = segment(normalized, { locator: "document" });
+        if (next) segments = [next];
+    }
+
+    return segments.map((item, segmentIndex) => ({
+        ...item,
+        metadata: { ...item.metadata, segmentIndex },
+    }));
 }
 
 /**
@@ -535,6 +610,7 @@ export async function parseDocument(
     return {
         text: extractedText,
         format,
+        segments: createStructuralSegments(format, extractedText),
         metadata: {
             filename: cleanFilename,
             contentType: options.contentType || undefined,

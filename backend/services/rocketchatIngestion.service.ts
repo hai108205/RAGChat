@@ -26,6 +26,11 @@ import {
 } from "./documentParser.js";
 import { sendRocketChatCallback } from "../controllers/rocketchatIntegration.controller.js";
 import type { RocketChatIngestionJobPayload } from "../utils/rocketchatQueue.js";
+import { createIngestionDedupeKey } from "../rag/documentIdentity.js";
+import { createRagScope } from "../rag/types.js";
+import { indexRagDocumentV1 } from "../rag/ingestion.js";
+import { getRagCollectionName, ensureRagCollection } from "../rag/qdrantIndex.service.js";
+import { splitParsedDocumentSegments } from "../rag/chunking.js";
 
 export interface Base64IngestionInput {
     workspaceId?: string;
@@ -87,9 +92,12 @@ export async function ingestBase64Document(
     }
 
     // 4. Split into chunks
+    const useRagV1 = config.rag.v1Enabled;
     const chunks = splitDocumentationContent(parsed.text, {
-        chunkSize: 1000,
-        chunkOverlap: 150,
+        // The legacy splitter is character based; use a conservative token→character
+        // approximation for the v1 rollout until structural splitters are enabled.
+        chunkSize: useRagV1 ? config.rag.chunkSizeTokens * 4 : 1000,
+        chunkOverlap: useRagV1 ? config.rag.chunkOverlapTokens * 4 : 150,
     });
 
     if (chunks.length === 0) {
@@ -112,18 +120,62 @@ export async function ingestBase64Document(
         workspaceId,
     });
 
-    // 6. Allocate Qdrant collection
-    const collectionName = `rc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const selectedEmbeddingModel = embeddingModel || config.llm.embeddingModel;
     const dimensions = getEmbeddingDimensionsForModel(selectedEmbeddingModel);
+    const ragCollectionName = getRagCollectionName(config.rag.indexVersion, selectedEmbeddingModel, dimensions);
+    const legacyCollectionName = `rc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const collectionName = useRagV1 && !config.rag.dualWriteEnabled ? ragCollectionName : legacyCollectionName;
 
-    await qdrant.createCollection(collectionName, {
-        vectors: { size: dimensions, distance: "Cosine" },
-    });
+    if (!useRagV1 || config.rag.dualWriteEnabled) {
+        await qdrant.createCollection(legacyCollectionName, {
+            vectors: { size: dimensions, distance: "Cosine" },
+        });
+    }
+    const ragSegments = useRagV1
+        ? await splitParsedDocumentSegments({
+            format: parsed.format,
+            segments: parsed.segments?.length
+                ? parsed.segments
+                : [{ content: parsed.text, metadata: { locator: normalizedFilename } }],
+        }, {
+            chunkSize: config.rag.chunkSizeTokens * 4,
+            chunkOverlap: config.rag.chunkOverlapTokens * 4,
+        })
+        : [];
+    if (useRagV1 && ragSegments.length === 0) {
+        throw new DocumentParserError("EMPTY_FILE", `Document "${normalizedFilename}" could not be split into valid v1 chunks`);
+    }
+    if (useRagV1) {
+        await ensureRagCollection(qdrant, ragCollectionName, dimensions);
+    }
 
     let createdSourceId: string | null = null;
 
     try {
+        const documentType = parsed.format.toLowerCase();
+        const dedupeKey = createIngestionDedupeKey({
+            scope: `rocketchat:${workspaceId}:${roomId}:${threadId || ""}`,
+            filename: normalizedFilename,
+            content: parsed.text,
+            documentType,
+        });
+        if (useRagV1) {
+            const existingSource = await prisma.chatSource.findUnique({
+                where: { dedupeKey },
+                include: { ragDocuments: { where: { status: "ACTIVE" }, take: 1 } },
+            });
+            if (existingSource?.ragDocuments?.[0]) {
+                return {
+                    sourceId: existingSource.id,
+                    chunksCount: existingSource.ragDocuments[0].chunkCount,
+                    filename: normalizedFilename,
+                    format: parsed.format,
+                    collectionName: existingSource.ragDocuments[0].collectionName,
+                    sourceUrl: existingSource.documentationUrl,
+                };
+            }
+        }
+
         const sourceId = crypto.randomUUID();
         const sourceUrl = buildRocketChatDocumentationUrl({
             workspaceId,
@@ -140,6 +192,7 @@ export async function ingestBase64Document(
                 heading: normalizedFilename,
                 documentationUrl: sourceUrl,
                 collectionName,
+                dedupeKey,
                 totalPages: parsed.metadata.totalPages || chunks.length,
                 lastIndexedAt: new Date(),
                 rocketchatWorkspaceId: workspaceId || "default",
@@ -155,29 +208,60 @@ export async function ingestBase64Document(
         });
         createdSourceId = source.id;
 
-        // 8. Generate embeddings
-        const embeddings = (await generateVectorEmbeddings(
-            chunks.map((c) => c.content),
-            { model: selectedEmbeddingModel, dimensions },
-        )) as number[][];
+        // 8. Embeddings must be generated from the exact chunks each index receives.
+        // Structural v1 chunks and legacy chunks may have different boundaries/counts.
+        const shouldWriteLegacy = !useRagV1 || config.rag.dualWriteEnabled;
+        const v1Embeddings = useRagV1
+            ? (await generateVectorEmbeddings(
+                ragSegments.map((segment) => segment.content),
+                { model: selectedEmbeddingModel, dimensions },
+            )) as number[][]
+            : [];
+        const legacyEmbeddings = shouldWriteLegacy
+            ? (await generateVectorEmbeddings(
+                chunks.map((chunk) => chunk.content),
+                { model: selectedEmbeddingModel, dimensions },
+            )) as number[][]
+            : [];
 
-        // 9. Upsert points to Qdrant
-        await qdrant.upsert(collectionName, {
-            wait: true,
-            points: chunks.map((chunk, index) => ({
-                id: crypto.randomUUID(),
-                vector: embeddings[index],
-                payload: {
-                    url: sourceUrl,
-                    title: normalizedFilename,
-                    heading: chunk.heading || normalizedFilename,
-                    body: chunk.content,
-                    chatSourceId: source.id,
-                    chunkType: chunk.chunkType,
-                    hasCodeBlock: chunk.hasCodeBlock,
-                },
-            })),
-        });
+        if (useRagV1) {
+            await indexRagDocumentV1({
+                sourceId: source.id,
+                sourceUrl,
+                filename: normalizedFilename,
+                documentType,
+                content: parsed.text,
+                embeddingModel: selectedEmbeddingModel,
+                dimensions,
+                indexVersion: config.rag.indexVersion,
+                scope: createRagScope({ kind: "rocketchat", workspaceId, roomId, threadId }),
+                chunks: ragSegments.map((chunk) => ({
+                    content: chunk.content,
+                    locator: chunk.metadata.locator,
+                    metadata: chunk.metadata,
+                })),
+                embeddings: v1Embeddings,
+            }, { prisma, qdrant });
+        }
+
+        if (shouldWriteLegacy) {
+            await qdrant.upsert(legacyCollectionName, {
+                wait: true,
+                points: chunks.map((chunk, index) => ({
+                    id: crypto.randomUUID(),
+                    vector: legacyEmbeddings[index],
+                    payload: {
+                        url: sourceUrl,
+                        title: normalizedFilename,
+                        heading: chunk.heading || normalizedFilename,
+                        body: chunk.content,
+                        chatSourceId: source.id,
+                        chunkType: chunk.chunkType,
+                        hasCodeBlock: chunk.hasCodeBlock,
+                    },
+                })),
+            });
+        }
 
         // 10. Persist DocumentPage metadata
         await prisma.documentPage.createMany({
@@ -219,10 +303,12 @@ export async function ingestBase64Document(
             "Ingestion failed; rolling back partial collection and DB records",
         );
 
-        try {
-            await deleteQdrantCollectionSafe(collectionName);
-        } catch (cleanupErr: any) {
-            logger.warn({ err: cleanupErr.message }, "Failed to delete partial Qdrant collection");
+        if (!useRagV1 || config.rag.dualWriteEnabled) {
+            try {
+                await deleteQdrantCollectionSafe(legacyCollectionName);
+            } catch (cleanupErr: any) {
+                logger.warn({ err: cleanupErr.message }, "Failed to delete partial legacy Qdrant collection");
+            }
         }
 
         if (createdSourceId) {
