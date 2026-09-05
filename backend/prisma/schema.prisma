@@ -94,9 +94,51 @@ model ChatSource {
     embeddingModel         String?        @map("embedding_model")
     embeddingDimensions    Int?           @map("embedding_dimensions")
     dedupeKey              String?        @unique @map("dedupe_key")
+    ragDocuments           RagDocument[]
 
     @@index([rocketchatWorkspaceId, rocketchatRoomId, createdAt])
     @@index([documentationUrl])
+}
+
+enum RagDocumentStatus {
+    INGESTING
+    ACTIVE
+    FAILED
+    SUPERSEDED
+}
+
+model RagDocument {
+    id                String            @id @default(uuid())
+    chatSourceId      String            @map("chat_source_id")
+    contentHash       String            @map("content_hash")
+    versionHash       String            @map("version_hash")
+    documentType      String            @map("document_type")
+    embeddingModel    String            @map("embedding_model")
+    embeddingDimensions Int              @map("embedding_dimensions")
+    collectionName    String            @map("collection_name")
+    status            RagDocumentStatus @default(INGESTING)
+    chunkCount        Int               @default(0) @map("chunk_count")
+    createdAt         DateTime          @default(now()) @map("created_at")
+    activatedAt       DateTime?         @map("activated_at")
+    chatSource        ChatSource        @relation(fields: [chatSourceId], references: [id], onDelete: Cascade)
+    chunks            RagChunk[]
+
+    @@unique([chatSourceId, versionHash, embeddingModel, embeddingDimensions])
+    @@index([chatSourceId, status])
+}
+
+model RagChunk {
+    id          String      @id
+    documentId  String      @map("document_id")
+    chunkIndex  Int         @map("chunk_index")
+    contentHash String      @map("content_hash")
+    locator     String
+    metadata    Json
+    createdAt   DateTime    @default(now()) @map("created_at")
+    document    RagDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+    @@unique([documentId, chunkIndex])
+    @@index([documentId])
 }
 
 model IngestionRun {
