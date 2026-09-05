@@ -203,6 +203,10 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
                         chunkText: r.snippet || "",
                         pageUrl: r.pageUrl || "",
                         score: Math.round(r.relevance * 100),
+                        sourceId: r.metadata?.sourceId?.toString() || null,
+                        documentId: r.metadata?.documentId?.toString() || null,
+                        chunkId: r.metadata?.chunkId?.toString() || null,
+                        versionHash: r.metadata?.versionHash?.toString() || null,
                     })),
                 });
             } catch (srcErr: any) {

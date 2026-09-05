@@ -204,6 +204,13 @@ model ChatMessageSource {
     chatMessageId String      @map("chat_message_id")
     chatMessage   ChatMessage @relation(fields: [chatMessageId], references: [id])
     score         Int         @default(0) @map("score")
+    sourceId      String?     @map("source_id")
+    documentId    String?     @map("document_id")
+    chunkId       String?     @map("chunk_id")
+    versionHash   String?     @map("version_hash")
+
+    @@index([documentId])
+    @@index([chunkId])
 }
 
 model ApiKey {

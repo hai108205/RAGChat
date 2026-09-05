@@ -337,6 +337,10 @@ const sendMessage = asyncHandler(async (req: Request, res: Response) => {
                     pageUrl: point.payload.url,
                     chatMessageId: chatMessage.id,
                     score: Math.round(point.score * 100),
+                    sourceId: point.payload.sourceId ?? null,
+                    documentId: point.payload.documentId ?? null,
+                    chunkId: point.payload.chunkId ?? point.id?.toString() ?? null,
+                    versionHash: point.payload.versionHash ?? null,
                 })),
             });
         }
