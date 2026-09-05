@@ -104,6 +104,17 @@ export interface AppConfig {
         robotsCacheTtlMs: number;
         allowOnRobotsError: boolean;
     };
+    rag: {
+        v1Enabled: boolean;
+        dualWriteEnabled: boolean;
+        dualReadEnabled: boolean;
+        allowLegacyAvailabilityFallback: boolean;
+        indexVersion: string;
+        chunkSizeTokens: number;
+        chunkOverlapTokens: number;
+        retrievalCandidateLimit: number;
+        contextTokenBudget: number;
+    };
     observability: { logLevel: string; metricsToken?: string };
     integrations: { resendApiKey?: string; mem0ApiKey?: string; dailyTokenBudget: number | null };
 }
@@ -146,6 +157,12 @@ export function parseEnvironment(environment: Environment, validatePolicies = tr
     const openRouterEmbeddingApiKey = optionalText.parse(environment.OPENROUTER_EMBEDDING_API_KEY);
     if (validatePolicies && nodeEnv !== "test" && !openAiApiKey && (!openRouterLlmApiKey || !openRouterEmbeddingApiKey)) {
         throw new Error("OPENAI_API_KEY or both OPENROUTER_LLM_API_KEY and OPENROUTER_EMBEDDING_API_KEY are required");
+    }
+
+    const ragChunkSizeTokens = parseInteger("RAG_CHUNK_SIZE_TOKENS", environment.RAG_CHUNK_SIZE_TOKENS, 640, 64, 4096);
+    const ragChunkOverlapTokens = parseInteger("RAG_CHUNK_OVERLAP_TOKENS", environment.RAG_CHUNK_OVERLAP_TOKENS, 80, 0, 2048);
+    if (ragChunkOverlapTokens >= ragChunkSizeTokens) {
+        throw new Error("RAG_CHUNK_OVERLAP_TOKENS must be smaller than RAG_CHUNK_SIZE_TOKENS");
     }
 
     const config: AppConfig = {
@@ -204,6 +221,33 @@ export function parseEnvironment(environment: Environment, validatePolicies = tr
             robotsTimeoutMs: parseInteger("CRAWL_ROBOTS_TIMEOUT_MS", environment.CRAWL_ROBOTS_TIMEOUT_MS, 5000, 1),
             robotsCacheTtlMs: parseInteger("CRAWL_ROBOTS_CACHE_TTL_MS", environment.CRAWL_ROBOTS_CACHE_TTL_MS, 600000, 1),
             allowOnRobotsError: parseBoolean("CRAWL_ALLOW_ON_ROBOTS_ERROR", environment.CRAWL_ALLOW_ON_ROBOTS_ERROR, false),
+        },
+        rag: {
+            v1Enabled: parseBoolean("RAG_V1_ENABLED", environment.RAG_V1_ENABLED, false),
+            dualWriteEnabled: parseBoolean("RAG_V1_DUAL_WRITE_ENABLED", environment.RAG_V1_DUAL_WRITE_ENABLED, false),
+            dualReadEnabled: parseBoolean("RAG_V1_DUAL_READ_ENABLED", environment.RAG_V1_DUAL_READ_ENABLED, false),
+            allowLegacyAvailabilityFallback: parseBoolean(
+                "RAG_ALLOW_LEGACY_AVAILABILITY_FALLBACK",
+                environment.RAG_ALLOW_LEGACY_AVAILABILITY_FALLBACK,
+                false,
+            ),
+            indexVersion: environment.RAG_INDEX_VERSION?.trim() || "v1",
+            chunkSizeTokens: ragChunkSizeTokens,
+            chunkOverlapTokens: ragChunkOverlapTokens,
+            retrievalCandidateLimit: parseInteger(
+                "RAG_RETRIEVAL_CANDIDATE_LIMIT",
+                environment.RAG_RETRIEVAL_CANDIDATE_LIMIT,
+                24,
+                3,
+                100,
+            ),
+            contextTokenBudget: parseInteger(
+                "RAG_CONTEXT_TOKEN_BUDGET",
+                environment.RAG_CONTEXT_TOKEN_BUDGET,
+                6000,
+                256,
+                100000,
+            ),
         },
         observability: {
             logLevel: environment.LOG_LEVEL || "info",

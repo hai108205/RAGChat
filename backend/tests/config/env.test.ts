@@ -61,4 +61,23 @@ describe("parseEnvironment", () => {
 
         expect(() => parseEnvironment(environment)).toThrow(/CIPHER_KEY/i);
     });
+
+    it("parses bounded typed RAG configuration without changing existing defaults", () => {
+        const environment = baseEnvironment();
+        environment.RAG_V1_ENABLED = "true";
+        environment.RAG_V1_DUAL_WRITE_ENABLED = "true";
+        environment.RAG_CHUNK_SIZE_TOKENS = "640";
+        environment.RAG_CHUNK_OVERLAP_TOKENS = "80";
+        environment.RAG_RETRIEVAL_CANDIDATE_LIMIT = "24";
+
+        const config = parseEnvironment(environment);
+
+        expect(config.rag).toMatchObject({
+            v1Enabled: true,
+            dualWriteEnabled: true,
+            chunkSizeTokens: 640,
+            chunkOverlapTokens: 80,
+            retrievalCandidateLimit: 24,
+        });
+    });
 });
