@@ -26,6 +26,11 @@ export interface RagV1SearchDependencies {
     qdrant: { query: (collection: string, request: any) => Promise<any> };
 }
 
+export interface RagV1SearchWithCoverage {
+    results: RagV1SearchResult[];
+    activeSourceIds: string[];
+}
+
 export function buildRagScopeFilter(scope: RagScope): Record<string, unknown> {
     if (scope.kind === "web") return { must: [{ key: "chatId", match: { value: scope.chatId } }] };
     const must = [
@@ -52,9 +57,9 @@ function score(value: unknown): number {
 export async function searchRagV1(
     input: { query: string; scope: RagScope; indexVersion: string; embeddingModel: string; dimensions: number; limit: number; minScore?: number },
     deps: RagV1SearchDependencies,
-): Promise<RagV1SearchResult[]> {
+): Promise<RagV1SearchWithCoverage> {
     const query = input.query.trim();
-    if (!query) return [];
+    if (!query) return { results: [], activeSourceIds: [] };
 
     const sourceWhere = input.scope.kind === "web"
         ? { chats: { some: { id: input.scope.chatId } } }
@@ -74,7 +79,7 @@ export async function searchRagV1(
         include: { chatSource: { select: { heading: true, documentationUrl: true } } },
         orderBy: { activatedAt: "desc" },
     });
-    if (manifests.length === 0) return [];
+    if (manifests.length === 0) return { results: [], activeSourceIds: [] };
 
     const embeddingResult = await deps.embed(query, { model: input.embeddingModel, dimensions: input.dimensions });
     const vector = Array.isArray(embeddingResult[0]) ? (embeddingResult as number[][])[0] : embeddingResult as number[];
@@ -100,7 +105,7 @@ export async function searchRagV1(
         [...latestManifestBySource.values()].map((manifest) => [manifest.id, manifest]),
     );
     const seen = new Set<string>();
-    return (response?.points ?? []).flatMap((point: any) => {
+    const results = (response?.points ?? []).flatMap((point: any) => {
         const payload = (point.payload ?? {}) as Record<string, any>;
         const manifest = manifestById.get(payload.documentId);
         if (!manifest || seen.has(point.id)) return [];
@@ -123,20 +128,23 @@ export async function searchRagV1(
             },
         }];
     }).sort((a: RagV1SearchResult, b: RagV1SearchResult) => b.relevance - a.relevance).slice(0, input.limit);
+    return { results, activeSourceIds: [...latestManifestBySource.keys()] };
 }
 
-export type LegacyFallbackReason = "DUAL_READ" | "V1_COVERAGE_GAP" | "V1_RUNTIME_FAILURE";
+export type LegacyFallbackReason = "V1_COVERAGE_GAP" | "V1_RUNTIME_FAILURE";
 
 export function resolveLegacyReadDecision(input: {
-    v1ResultCount: number;
+    uncoveredSourceIds: readonly string[];
     dualReadEnabled: boolean;
     allowAvailabilityFallback: boolean;
     v1Failed?: boolean;
 }): { shouldReadLegacy: boolean; reason?: LegacyFallbackReason } {
-    if (input.dualReadEnabled) return { shouldReadLegacy: true, reason: "DUAL_READ" };
-    if (!input.allowAvailabilityFallback) return { shouldReadLegacy: false };
-    if (input.v1Failed) return { shouldReadLegacy: true, reason: "V1_RUNTIME_FAILURE" };
-    return input.v1ResultCount === 0
+    if (input.v1Failed) {
+        return input.allowAvailabilityFallback
+            ? { shouldReadLegacy: true, reason: "V1_RUNTIME_FAILURE" }
+            : { shouldReadLegacy: false };
+    }
+    return input.dualReadEnabled && input.uncoveredSourceIds.length > 0
         ? { shouldReadLegacy: true, reason: "V1_COVERAGE_GAP" }
         : { shouldReadLegacy: false };
 }
@@ -144,6 +152,6 @@ export function resolveLegacyReadDecision(input: {
 export async function searchWebRagV1(
     input: { query: string; chatId: string; indexVersion: string; embeddingModel: string; dimensions: number; limit: number; minScore?: number },
     deps: RagV1SearchDependencies,
-): Promise<RagV1SearchResult[]> {
+): Promise<RagV1SearchWithCoverage> {
     return searchRagV1({ ...input, scope: { kind: "web", chatId: input.chatId } }, deps);
 }

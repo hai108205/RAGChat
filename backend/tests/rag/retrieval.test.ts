@@ -39,9 +39,10 @@ describe("RAG v1 retrieval", () => {
                 ] };
             } },
         });
-        expect(result).toHaveLength(1);
-        expect(result[0]).toMatchObject({ snippet: "answer", pageUrl: "https://doc#1", relevance: 0.9 });
-        expect(result[0].metadata).toMatchObject({ documentId: "doc-1", chunkId: "chunk-1", retrievalMode: "rag_v1" });
+        expect(result.activeSourceIds).toEqual(["source-1"]);
+        expect(result.results).toHaveLength(1);
+        expect(result.results[0]).toMatchObject({ snippet: "answer", pageUrl: "https://doc#1", relevance: 0.9 });
+        expect(result.results[0].metadata).toMatchObject({ documentId: "doc-1", chunkId: "chunk-1", retrievalMode: "rag_v1" });
     });
 
     it("excludes superseded active manifests for the same source during a re-index", async () => {
@@ -65,16 +66,35 @@ describe("RAG v1 retrieval", () => {
             ] }) },
         });
 
-        expect(result).toHaveLength(1);
-        expect(result[0]).toMatchObject({ snippet: "current", metadata: { documentId: "new", versionHash: "new" } });
+        expect(result.activeSourceIds).toEqual(["source-1"]);
+        expect(result.results).toHaveLength(1);
+        expect(result.results[0]).toMatchObject({ snippet: "current", metadata: { documentId: "new", versionHash: "new" } });
     });
 
-    it("allows a legacy read only for explicit migration policies", () => {
-        expect(resolveLegacyReadDecision({ v1ResultCount: 2, dualReadEnabled: true, allowAvailabilityFallback: false }))
-            .toEqual({ shouldReadLegacy: true, reason: "DUAL_READ" });
-        expect(resolveLegacyReadDecision({ v1ResultCount: 0, dualReadEnabled: false, allowAvailabilityFallback: true }))
-            .toEqual({ shouldReadLegacy: true, reason: "V1_COVERAGE_GAP" });
-        expect(resolveLegacyReadDecision({ v1ResultCount: 0, dualReadEnabled: false, allowAvailabilityFallback: false }))
-            .toEqual({ shouldReadLegacy: false });
+    it("reads legacy only for sources without active v1 coverage", () => {
+        expect(resolveLegacyReadDecision({
+            uncoveredSourceIds: ["legacy-only"],
+            dualReadEnabled: true,
+            allowAvailabilityFallback: false,
+        })).toEqual({ shouldReadLegacy: true, reason: "V1_COVERAGE_GAP" });
+        expect(resolveLegacyReadDecision({
+            uncoveredSourceIds: [],
+            dualReadEnabled: true,
+            allowAvailabilityFallback: false,
+        })).toEqual({ shouldReadLegacy: false });
+    });
+
+    it("does not turn an empty v1 result into a legacy fallback", () => {
+        expect(resolveLegacyReadDecision({
+            uncoveredSourceIds: [],
+            dualReadEnabled: false,
+            allowAvailabilityFallback: true,
+        })).toEqual({ shouldReadLegacy: false });
+        expect(resolveLegacyReadDecision({
+            uncoveredSourceIds: [],
+            dualReadEnabled: false,
+            allowAvailabilityFallback: true,
+            v1Failed: true,
+        })).toEqual({ shouldReadLegacy: true, reason: "V1_RUNTIME_FAILURE" });
     });
 });

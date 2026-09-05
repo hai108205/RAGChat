@@ -7,7 +7,8 @@ import {
 export interface LabelledQualityCorpus {
     cases: readonly RetrievalQualityCase[];
     citations: readonly { sourceId?: unknown; documentId?: unknown; chunkId?: unknown }[];
-    baseline: { recallAtK: number; mrrAtK: number };
+    baseline: { recallAtK: number; mrrAtK: number; retrievalErrorRate?: number; p95RetrievalLatencyMs?: number };
+    observed?: { retrievalErrorRate: number; p95RetrievalLatencyMs: number };
     maxMrrRegression?: number;
     scopeLeaks?: number;
 }
@@ -26,6 +27,11 @@ export function evaluateQualityCorpus(
 ): QualityCorpusReport {
     if (corpus.cases.length < minimumCaseCount) {
         throw new Error(`RAG quality corpus requires at least ${minimumCaseCount} labelled cases; received ${corpus.cases.length}`);
+    }
+    if (corpus.baseline.retrievalErrorRate === undefined
+        || corpus.baseline.p95RetrievalLatencyMs === undefined
+        || corpus.observed === undefined) {
+        throw new Error("RAG quality corpus requires operational metrics for baseline error rate, baseline p95 latency, and observed measurements");
     }
     return {
         ...evaluateRagQualityGates(corpus),

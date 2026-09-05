@@ -13,6 +13,7 @@ import { config } from "../config/runtime.js";
 import { buildRagContext } from "../rag/context.js";
 import { rewriteQueryWithStructuredOutput } from "../rag/queryRewrite.js";
 import { startRagTrace } from "../rag/telemetry.js";
+import { trimHistoryForGeneration } from "../rag/history.js";
 
 export interface RocketChatChatPayload {
     workspaceId?: string;
@@ -154,15 +155,15 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
 
         const messages: any[] = [{ role: "system", content: systemPrompt }];
 
-        if (Array.isArray(history)) {
-            for (const h of history.slice(-6)) {
-                if (h.role && h.content) {
-                    messages.push({
-                        role: h.role === "user" ? "user" : "assistant",
-                        content: String(h.content),
-                    });
-                }
-            }
+        const boundedHistory = await trace.stage("CONTEXT", () => trimHistoryForGeneration(
+            history,
+            Math.max(256, Math.floor((config.rag?.contextTokenBudget ?? 5600) * 0.2)),
+        ));
+        for (const message of boundedHistory) {
+            messages.push({
+                role: message.getType() === "human" ? "user" : "assistant",
+                content: message.content,
+            });
         }
 
         messages.push({ role: "user", content: query });

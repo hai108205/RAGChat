@@ -16,4 +16,13 @@ describe("RAG quality gates", () => {
         expect(report.passed).toBe(false);
         expect(report.citationProvenance).toBe(0);
     });
+
+    it("rejects a release that exceeds the configured retrieval error or latency budgets", () => {
+        expect(evaluateRagQualityGates({
+            cases: [{ queryId: "q1", relevantIds: ["a"], retrievedIds: ["a"] }],
+            citations: [{ sourceId: "source", documentId: "doc", chunkId: "chunk" }],
+            baseline: { recallAtK: 1, mrrAtK: 1, retrievalErrorRate: 0.01, p95RetrievalLatencyMs: 100 },
+            observed: { retrievalErrorRate: 0.016, p95RetrievalLatencyMs: 126 },
+        })).toMatchObject({ passed: false });
+    });
 });

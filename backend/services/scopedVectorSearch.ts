@@ -38,6 +38,8 @@ export interface ScopedVectorSearchInput {
     allowGlobal?: boolean;
     throwOnQdrantError?: boolean;
     fallbackToKeyword?: boolean;
+    /** Restricts a migration legacy read to v1-uncovered source IDs. */
+    legacySourceIds?: readonly string[];
     /** Internal guard used while reading the legacy index during migration. */
     __skipRagV1?: boolean;
 }
@@ -154,6 +156,7 @@ export async function scopedVectorSearch(
     const allowGlobal = Boolean(input.scope?.allowGlobal ?? input.allowGlobal);
     const throwOnQdrantError = Boolean(input.throwOnQdrantError);
     const fallbackToKeyword = input.fallbackToKeyword !== false;
+    const legacySourceIds = input.legacySourceIds;
 
     if (config.rag.v1Enabled && !input.__skipRagV1 && mode === "room") {
         const ragScope = createRagScope({
@@ -165,7 +168,7 @@ export async function scopedVectorSearch(
         const profileModel = input.embeddingModel || config.llm.embeddingModel;
         const profileDimensions = getEmbeddingDimensionsForModel(profileModel);
         try {
-            const v1Results = await searchRagV1({
+            const v1 = await searchRagV1({
                 query,
                 scope: ragScope,
                 indexVersion: config.rag.indexVersion,
@@ -174,22 +177,34 @@ export async function scopedVectorSearch(
                 limit,
                 minScore,
             }, { prisma, embed: generateVectorEmbeddings, qdrant });
+            const legacyCandidates = await prisma.chatSource.findMany({
+                where: {
+                    AND: [
+                        buildChatSourceScopeWhere({ workspaceId, roomId, threadId, mode: "room", allowGlobal: false }),
+                        { collectionName: { not: null } },
+                    ],
+                },
+                select: { id: true },
+            });
+            const uncoveredSourceIds = legacyCandidates
+                .map((source: { id: string }) => source.id)
+                .filter((sourceId: string) => !v1.activeSourceIds.includes(sourceId));
             const legacyDecision = resolveLegacyReadDecision({
-                v1ResultCount: v1Results.length,
+                uncoveredSourceIds,
                 dualReadEnabled: config.rag.dualReadEnabled,
                 allowAvailabilityFallback: config.rag.allowLegacyAvailabilityFallback,
             });
-            if (!legacyDecision.shouldReadLegacy) return v1Results;
+            if (!legacyDecision.shouldReadLegacy) return v1.results;
             logger.info({
                 ragEvent: legacyDecision.reason,
                 queryLength: query.length,
                 workspaceId,
                 roomId,
-                v1ResultCount: v1Results.length,
+                uncoveredSourceCount: uncoveredSourceIds.length,
             }, "RAG v1 legacy-read policy activated");
-            const legacyResults = await scopedVectorSearch({ ...input, __skipRagV1: true });
+            const legacyResults = await scopedVectorSearch({ ...input, __skipRagV1: true, legacySourceIds: uncoveredSourceIds });
             const merged: ScopedSearchResult[] = [
-                ...v1Results,
+                ...v1.results,
                 ...legacyResults.map((result) => ({
                     ...result,
                     metadata: { ...result.metadata, legacy_fallback_reason: legacyDecision.reason } as Record<string, unknown>,
@@ -205,7 +220,7 @@ export async function scopedVectorSearch(
         } catch (error: any) {
             logger.error({ err: error?.message || String(error), queryLength: query.length }, "RAG v1 retrieval failed");
             const legacyDecision = resolveLegacyReadDecision({
-                v1ResultCount: 0,
+                uncoveredSourceIds: [],
                 dualReadEnabled: false,
                 allowAvailabilityFallback: config.rag.allowLegacyAvailabilityFallback,
                 v1Failed: true,
@@ -255,6 +270,7 @@ export async function scopedVectorSearch(
                     {
                         collectionName: { not: null },
                     },
+                    ...(legacySourceIds ? [{ id: { in: [...legacySourceIds] } }] : []),
                 ],
             },
             select: {

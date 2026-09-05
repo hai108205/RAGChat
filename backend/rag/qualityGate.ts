@@ -9,6 +9,8 @@ export interface QualityGateReport {
     mrrAtK: number;
     citationProvenance: number;
     scopeLeaks: number;
+    retrievalErrorRate?: number;
+    p95RetrievalLatencyMs?: number;
     passed: boolean;
 }
 
@@ -29,7 +31,8 @@ export function evaluateRetrievalQuality(cases: readonly RetrievalQualityCase[],
 export function evaluateRagQualityGates(input: {
     cases: readonly RetrievalQualityCase[];
     citations: readonly { sourceId?: unknown; documentId?: unknown; chunkId?: unknown }[];
-    baseline: { recallAtK: number; mrrAtK: number };
+    baseline: { recallAtK: number; mrrAtK: number; retrievalErrorRate?: number; p95RetrievalLatencyMs?: number };
+    observed?: { retrievalErrorRate: number; p95RetrievalLatencyMs: number };
     maxMrrRegression?: number;
     scopeLeaks?: number;
 }): QualityGateReport {
@@ -38,9 +41,25 @@ export function evaluateRagQualityGates(input: {
         ? input.citations.filter((citation) => citation.sourceId && citation.documentId && citation.chunkId).length / input.citations.length
         : 1;
     const scopeLeaks = input.scopeLeaks ?? 0;
+    const operationalMetricsProvided = input.baseline.retrievalErrorRate !== undefined
+        || input.baseline.p95RetrievalLatencyMs !== undefined
+        || input.observed !== undefined;
+    const operationalMetricsValid = !operationalMetricsProvided
+        || (input.baseline.retrievalErrorRate !== undefined
+            && input.baseline.p95RetrievalLatencyMs !== undefined
+            && input.observed !== undefined
+            && input.observed.retrievalErrorRate <= input.baseline.retrievalErrorRate + 0.005
+            && input.observed.p95RetrievalLatencyMs <= input.baseline.p95RetrievalLatencyMs * 1.25);
     const passed = metrics.recallAtK >= input.baseline.recallAtK
         && metrics.mrrAtK >= input.baseline.mrrAtK * (1 - (input.maxMrrRegression ?? 0.05))
         && citationProvenance === 1
-        && scopeLeaks === 0;
-    return { ...metrics, citationProvenance, scopeLeaks, passed };
+        && scopeLeaks === 0
+        && operationalMetricsValid;
+    return {
+        ...metrics,
+        citationProvenance,
+        scopeLeaks,
+        ...(input.observed ?? {}),
+        passed,
+    };
 }

@@ -7,11 +7,17 @@ export interface ChunkingOptions {
     chunkOverlap: number;
 }
 
+/** Approximate tokenizer for deterministic, provider-neutral chunk budgets. */
+export function estimateChunkTokens(text: string): number {
+    return text.trim() ? text.trim().split(/\s+/u).length : 0;
+}
+
 function splitterFor(type: DocumentType, options: ChunkingOptions) {
-    if (type === "markdown") return new MarkdownTextSplitter(options);
-    if (type === "code") return RecursiveCharacterTextSplitter.fromLanguage("js", options);
-    if (type === "html") return RecursiveCharacterTextSplitter.fromLanguage("html", options);
-    return new RecursiveCharacterTextSplitter({ ...options, separators: ["\n\n", "\n", ". ", " ", ""] });
+    const tokenOptions = { ...options, lengthFunction: estimateChunkTokens };
+    if (type === "markdown") return new MarkdownTextSplitter(tokenOptions);
+    if (type === "code") return RecursiveCharacterTextSplitter.fromLanguage("js", tokenOptions);
+    if (type === "html") return RecursiveCharacterTextSplitter.fromLanguage("html", tokenOptions);
+    return new RecursiveCharacterTextSplitter({ ...tokenOptions, separators: ["\n\n", "\n", ". ", " ", ""] });
 }
 
 function headingAt(text: string, position: number): string | undefined {

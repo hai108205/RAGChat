@@ -6,7 +6,7 @@ describe("type-aware chunking", () => {
         const segments = await splitIntoSegments({
             text: "# Intro\n\nFirst paragraph.\n\n## Details\n\nSecond paragraph.",
             documentType: "markdown",
-            options: { chunkSize: 40, chunkOverlap: 5 },
+            options: { chunkSize: 6, chunkOverlap: 1 },
         });
         expect(segments.length).toBeGreaterThan(1);
         expect(segments.some((segment) => segment.metadata.heading === "Intro")).toBe(true);
@@ -21,6 +21,20 @@ describe("type-aware chunking", () => {
         });
         expect(segments.length).toBeGreaterThan(0);
         expect(segments[0].metadata.documentType).toBe("code");
+    });
+
+    it("interprets chunk size as approximate tokens instead of characters", async () => {
+        const segments = await splitIntoSegments({
+            text: "one two three four five six",
+            documentType: "plain",
+            options: { chunkSize: 3, chunkOverlap: 0 },
+        });
+
+        expect(segments).toHaveLength(2);
+        expect(segments.map((segment) => segment.content)).toEqual([
+            "one two three",
+            "four five six",
+        ]);
     });
 
     it("preserves parser page, slide, or sheet metadata on emitted chunks", async () => {

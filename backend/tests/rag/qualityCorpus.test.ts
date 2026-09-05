@@ -20,10 +20,19 @@ describe("labelled RAG quality corpus", () => {
         const report = evaluateQualityCorpus({
             cases: Array.from({ length: 50 }, (_, index) => caseAt(index)),
             citations: [{ sourceId: "source", documentId: "document", chunkId: "chunk" }],
-            baseline: { recallAtK: 1, mrrAtK: 1 },
+            baseline: { recallAtK: 1, mrrAtK: 1, retrievalErrorRate: 0.01, p95RetrievalLatencyMs: 100 },
+            observed: { retrievalErrorRate: 0.01, p95RetrievalLatencyMs: 100 },
         });
 
         expect(report.caseCount).toBe(50);
         expect(report.passed).toBe(true);
+    });
+
+    it("fails closed when the corpus omits operational cutover measurements", () => {
+        expect(() => evaluateQualityCorpus({
+            cases: Array.from({ length: 50 }, (_, index) => caseAt(index)),
+            citations: [{ sourceId: "source", documentId: "document", chunkId: "chunk" }],
+            baseline: { recallAtK: 1, mrrAtK: 1 },
+        })).toThrow(/operational metrics/i);
     });
 });

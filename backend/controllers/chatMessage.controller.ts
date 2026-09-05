@@ -212,21 +212,26 @@ const sendMessage = asyncHandler(async (req: Request, res: Response) => {
                 limit: config.rag.retrievalCandidateLimit,
                 minScore: 0.3,
             }, { prisma, embed: generateVectorEmbeddings, qdrant });
-            relevantSources = v1.map((result) => ({
+            relevantSources = v1.results.map((result) => ({
                 id: result.metadata.chunkId || result.metadata.documentId,
                 score: result.relevance,
                 payload: { body: result.snippet, title: result.title, url: result.pageUrl, ...result.metadata },
             }));
             const legacyDecision = resolveLegacyReadDecision({
-                v1ResultCount: relevantSources.length,
+                uncoveredSourceIds: chat.chatSources
+                    .filter((source) => Boolean(source.collectionName?.trim()) && !v1.activeSourceIds.includes(source.id))
+                    .map((source) => source.id),
                 dualReadEnabled: config.rag.dualReadEnabled,
                 allowAvailabilityFallback: config.rag.allowLegacyAvailabilityFallback,
             });
             if (legacyDecision.shouldReadLegacy) {
-                logger.info({ ragEvent: legacyDecision.reason, chatId, queryLength: userPrompt.length, v1ResultCount: relevantSources.length }, "Web RAG v1 legacy-read policy activated");
+                const legacySources = chat.chatSources.filter((source) =>
+                    Boolean(source.collectionName?.trim()) && !v1.activeSourceIds.includes(source.id),
+                );
+                logger.info({ ragEvent: legacyDecision.reason, chatId, queryLength: userPrompt.length, uncoveredSourceCount: legacySources.length }, "Web RAG v1 legacy-read policy activated");
                 const legacyResults = await retrieveWebChatSources({
                     query: retrievalQuery,
-                    sources: chat.chatSources,
+                    sources: legacySources,
                     dependencies: {
                         generateEmbedding: async (query) => (await generateVectorEmbeddings(query)) as number[],
                         qdrant: { query: (collectionName, request) => qdrant.query(collectionName, request) as any },
@@ -239,7 +244,7 @@ const sendMessage = asyncHandler(async (req: Request, res: Response) => {
             }
         } catch (error) {
             const legacyDecision = resolveLegacyReadDecision({
-                v1ResultCount: 0,
+                uncoveredSourceIds: [],
                 dualReadEnabled: false,
                 allowAvailabilityFallback: config.rag.allowLegacyAvailabilityFallback,
                 v1Failed: true,
@@ -292,7 +297,7 @@ const sendMessage = asyncHandler(async (req: Request, res: Response) => {
         }
     }
 
-    const messagesForLLM = buildMessagesForLLM({
+    const messagesForLLM = await buildMessagesForLLM({
         systemInstructions,
         relevantSources,
         relevantNodes,

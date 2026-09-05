@@ -16,13 +16,13 @@ describe("contextBuilder", () => {
         expect(truncated.endsWith("...")).toBe(true);
     });
 
-    it("assembles system context sections and keeps total prompt within budget", () => {
+    it("assembles system context sections and keeps total prompt within budget", async () => {
         const history = Array.from({ length: 12 }, (_, index) => ({
             userPrompt: `Question ${index + 1} with some extra text`,
             llmResponse: `Answer ${index + 1} with extended explanation`,
         }));
 
-        const messages = buildMessagesForLLM({
+        const messages = await buildMessagesForLLM({
             systemInstructions: "System base instructions.",
             relevantSources: [
                 {
@@ -58,8 +58,8 @@ describe("contextBuilder", () => {
         expect(totalTokens).toBeLessThanOrEqual(250);
     });
 
-    it("builds deterministic, source-labelled context and removes duplicate v1 chunks", () => {
-        const messages = buildMessagesForLLM({
+    it("builds deterministic, source-labelled context and removes duplicate v1 chunks", async () => {
+        const messages = await buildMessagesForLLM({
             systemInstructions: "Ground answers in the context.",
             relevantSources: [
                 {
@@ -99,5 +99,15 @@ describe("contextBuilder", () => {
         expect(system).toContain("[2] Second document (https://example.test/second)");
         expect(system).not.toContain("Duplicate excerpt.");
         expect(system.indexOf("First excerpt.")).toBeLessThan(system.indexOf("Second excerpt."));
+    });
+
+    it("does not send an orphan assistant message as the start of the history window", async () => {
+        const messages = await buildMessagesForLLM({
+            systemInstructions: "Ground answers in the context.",
+            history: [{ llmResponse: "orphan answer" }],
+            userPrompt: "Current question",
+        });
+
+        expect(messages.map((message) => message.role)).toEqual(["system", "user"]);
     });
 });

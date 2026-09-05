@@ -10,8 +10,10 @@ The shared v1 collection name is derived from index version, embedding model, an
 
 ## Retrieval and answer generation
 
-Rocket.Chat retrieval first uses the active v1 manifests and a Qdrant scope filter. It only falls back to the legacy search when the explicit rollout flags allow it. Follow-up questions are expanded for retrieval using the latest user turn while the original message is preserved for generation. Context construction deduplicates chunks, orders by relevance, enforces a token budget, and emits stable `[n]` source labels. The model is instructed to answer only from supplied evidence and never invent citations.
+Web and Rocket.Chat retrieval first use active v1 manifests and a Qdrant scope filter. During dual-read, they query legacy only for sources without an active v1 manifest in the selected profile; an empty v1 result is a grounded no-result, not a fallback trigger. A v1 runtime failure may use legacy only when the explicit availability flag is enabled. Follow-up questions are expanded for retrieval while the original message is preserved for generation. Context construction deduplicates chunks, orders by relevance, enforces a token budget, and emits stable `[n]` source labels. Conversation history is trimmed through LangChain before generation and begins on a user turn. The model is instructed to answer only from supplied evidence and never invent citations.
 
 ## Operations
 
 Each chat request emits a redacted RAG trace with stage latencies for retrieval and generation. Stage-specific failures use `RagStageError` where the new ingestion/index path can identify chunk, embedding, or vector-store failures. Roll out by enabling dual-write, verifying v1 retrieval and citation quality, then enabling dual-read and finally disabling the legacy fallback.
+
+`pnpm rag:evaluate-quality` is a fail-closed release gate. Its human-labelled corpus must include at least 50 cases, scope and citation observations, legacy baseline Recall@10/MRR@10/error-rate/p95 latency, and v1 observed error-rate/p95 latency. The command does not manufacture production measurements.

@@ -1,3 +1,5 @@
+import { trimHistoryForGeneration } from "../rag/history.js";
+
 export interface ContextBudget {
     total: number;
     sources: number;
@@ -218,25 +220,12 @@ interface BuildRecentMessagesInput {
     budget: number;
 }
 
-const buildRecentMessages = ({ messages = [], budget }: BuildRecentMessagesInput): LLMMessage[] => {
-    const flattened = toMessagePairs(messages).reverse();
-    const selected: LLMMessage[] = [];
-    let used = 0;
-
-    for (const message of flattened) {
-        const tokens = estimateTokens(message.content);
-        if (used + tokens > budget) {
-            const remaining = budget - used;
-            const content = truncateToTokenBudget(message.content, remaining);
-            if (content) selected.push({ ...message, content });
-            break;
-        }
-
-        selected.push(message);
-        used += tokens;
-    }
-
-    return selected.reverse();
+const buildRecentMessages = async ({ messages = [], budget }: BuildRecentMessagesInput): Promise<LLMMessage[]> => {
+    const trimmed = await trimHistoryForGeneration(toMessagePairs(messages), budget);
+    return trimmed.map((message) => ({
+        role: message.getType() === "human" ? "user" : "assistant",
+        content: String(message.content),
+    }));
 };
 
 const fitMessagesToBudget = (messages: LLMMessage[], totalBudget: number): LLMMessage[] => {
@@ -269,7 +258,7 @@ export interface BuildMessagesForLLMInput {
     budget?: Partial<ContextBudget>;
 }
 
-const buildMessagesForLLM = ({
+const buildMessagesForLLM = async ({
     systemInstructions,
     relevantSources = [],
     relevantNodes = [],
@@ -277,7 +266,7 @@ const buildMessagesForLLM = ({
     history = [],
     userPrompt,
     budget = DEFAULT_CONTEXT_BUDGET,
-}: BuildMessagesForLLMInput): LLMMessage[] => {
+}: BuildMessagesForLLMInput): Promise<LLMMessage[]> => {
     const contextBudget: ContextBudget = { ...DEFAULT_CONTEXT_BUDGET, ...budget };
     const recentMessages = history.slice(-RECENT_TURN_COUNT);
     const summaryMessages = history.slice(0, Math.max(history.length - RECENT_TURN_COUNT, 0));
@@ -294,7 +283,7 @@ const buildMessagesForLLM = ({
         messages: summaryMessages,
         budget: contextBudget.summary,
     });
-    const recentContext = buildRecentMessages({
+    const recentContext = await buildRecentMessages({
         messages: recentMessages,
         budget: contextBudget.recent,
     });
