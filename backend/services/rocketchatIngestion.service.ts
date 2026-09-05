@@ -208,11 +208,21 @@ export async function ingestBase64Document(
         });
         createdSourceId = source.id;
 
-        // 8. Generate embeddings once; v1 and legacy writes share the same vectors.
-        const embeddings = (await generateVectorEmbeddings(
-            chunks.map((c) => c.content),
-            { model: selectedEmbeddingModel, dimensions },
-        )) as number[][];
+        // 8. Embeddings must be generated from the exact chunks each index receives.
+        // Structural v1 chunks and legacy chunks may have different boundaries/counts.
+        const shouldWriteLegacy = !useRagV1 || config.rag.dualWriteEnabled;
+        const v1Embeddings = useRagV1
+            ? (await generateVectorEmbeddings(
+                ragSegments.map((segment) => segment.content),
+                { model: selectedEmbeddingModel, dimensions },
+            )) as number[][]
+            : [];
+        const legacyEmbeddings = shouldWriteLegacy
+            ? (await generateVectorEmbeddings(
+                chunks.map((chunk) => chunk.content),
+                { model: selectedEmbeddingModel, dimensions },
+            )) as number[][]
+            : [];
 
         if (useRagV1) {
             await indexRagDocumentV1({
@@ -230,16 +240,16 @@ export async function ingestBase64Document(
                     locator: chunk.metadata.locator,
                     metadata: chunk.metadata,
                 })),
-                embeddings,
+                embeddings: v1Embeddings,
             }, { prisma, qdrant });
         }
 
-        if (!useRagV1 || config.rag.dualWriteEnabled) {
+        if (shouldWriteLegacy) {
             await qdrant.upsert(legacyCollectionName, {
                 wait: true,
                 points: chunks.map((chunk, index) => ({
                     id: crypto.randomUUID(),
-                    vector: embeddings[index],
+                    vector: legacyEmbeddings[index],
                     payload: {
                         url: sourceUrl,
                         title: normalizedFilename,
