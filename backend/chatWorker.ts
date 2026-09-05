@@ -12,6 +12,11 @@ import redis, { updateChatProgress } from "./utils/redis.js";
 import Bottleneck from "bottleneck";
 import { recordIngestionJobDuration } from "./utils/metrics.js";
 import { dispatchAlert } from "./utils/notificationDispatcher.js";
+import { config } from "./config/runtime.js";
+import { createRagScope } from "./rag/types.js";
+import { indexRagDocumentV1 } from "./rag/ingestion.js";
+import { ensureRagCollection, getRagCollectionName } from "./rag/qdrantIndex.service.js";
+import { splitIntoSegments } from "./rag/chunking.js";
 
 const normalizeDocsUrl = (docsUrl: string): string => normalizeUrl(docsUrl);
 
@@ -132,13 +137,16 @@ const processVectorJob = async (job: Job<JobData>, ingestionRunId?: string): Pro
         throw new Error("Missing collectionName for vector ingestion job");
     }
 
-    // Create the Qdrant collection
-    await qdrant.createCollection(collectionName, {
-        vectors: {
-            size: 1536,
-            distance: "Cosine",
-        },
-    });
+    const useRagV1 = config.rag.v1Enabled;
+    const embeddingModel = config.llm.embeddingModel;
+    const embeddingDimensions = embeddingModel.includes("text-embedding-3-large") ? 3072 : 1536;
+    const ragCollectionName = getRagCollectionName(config.rag.indexVersion, embeddingModel, embeddingDimensions);
+    if (!useRagV1 || config.rag.dualWriteEnabled) {
+        await qdrant.createCollection(collectionName, {
+            vectors: { size: embeddingDimensions, distance: "Cosine" },
+        });
+    }
+    if (useRagV1) await ensureRagCollection(qdrant, ragCollectionName, embeddingDimensions);
 
     const pagesToScrape: string[] = [];
     const scrapedPages = new Set<string>();
@@ -178,34 +186,66 @@ const processVectorJob = async (job: Job<JobData>, ingestionRunId?: string): Pro
             if (!body) return;
 
             const chunks = splitDocumentationContent(body, {
-                chunkSize: 1000,
-                chunkOverlap: 150,
+                chunkSize: useRagV1 ? config.rag.chunkSizeTokens * 4 : 1000,
+                chunkOverlap: useRagV1 ? config.rag.chunkOverlapTokens * 4 : 150,
             });
 
             if (chunks.length === 0) return;
 
+            const ragSegments = useRagV1
+                ? await splitIntoSegments({
+                    text: body,
+                    documentType: "html",
+                    locator: url,
+                    metadata: { title, sourceUrl: url },
+                    options: { chunkSize: config.rag.chunkSizeTokens * 4, chunkOverlap: config.rag.chunkOverlapTokens * 4 },
+                })
+                : [];
+            if (useRagV1 && ragSegments.length === 0) return;
+
             const embeddings = (await generateVectorEmbeddings(
                 chunks.map((c) => c.content),
+                { model: embeddingModel, dimensions: embeddingDimensions },
             )) as number[][];
 
-            const points = chunks.map((chunk, index) => ({
-                id: crypto.randomUUID(),
-                vector: embeddings[index],
-                payload: {
-                    url,
-                    title,
-                    heading: chunk.heading,
-                    body: chunk.content,
-                    chatSourceId,
-                    hasCodeBlock: chunk.hasCodeBlock,
-                    chunkType: chunk.chunkType,
-                },
-            }));
+            if (useRagV1) {
+                await indexRagDocumentV1({
+                    sourceId: chatSourceId!,
+                    sourceUrl: url,
+                    filename: title || url,
+                    documentType: "html",
+                    content: body,
+                    embeddingModel,
+                    dimensions: embeddingDimensions,
+                    indexVersion: config.rag.indexVersion,
+                    scope: createRagScope({ kind: "web", chatId }),
+                    chunks: ragSegments.map((chunk) => ({
+                        content: chunk.content,
+                        locator: chunk.metadata.locator,
+                        metadata: chunk.metadata,
+                    })),
+                    embeddings,
+                }, { prisma, qdrant });
+            }
 
-            await qdrant.upsert(collectionName, {
-                wait: true,
-                points,
-            });
+            if (!useRagV1 || config.rag.dualWriteEnabled) {
+                await qdrant.upsert(collectionName, {
+                    wait: true,
+                    points: chunks.map((chunk, index) => ({
+                        id: crypto.randomUUID(),
+                        vector: embeddings[index],
+                        payload: {
+                            url,
+                            title,
+                            heading: chunk.heading,
+                            body: chunk.content,
+                            chatSourceId,
+                            hasCodeBlock: chunk.hasCodeBlock,
+                            chunkType: chunk.chunkType,
+                        },
+                    })),
+                });
+            }
 
             await prisma.documentPage.create({
                 data: {

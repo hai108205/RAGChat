@@ -18,11 +18,15 @@ const FILTER_FIELDS = ["chatId", "workspaceId", "roomId", "threadId", "documentI
 export async function ensureRagCollection(client: QdrantIndexClient, name: string, dimensions: number): Promise<void> {
     try {
         await client.getCollection(name);
-        return;
     } catch {
         await client.createCollection(name, { vectors: { size: dimensions, distance: "Cosine" } });
     }
     for (const field_name of FILTER_FIELDS) {
-        await client.createPayloadIndex(name, { field_name, field_schema: "keyword" });
+        try {
+            await client.createPayloadIndex(name, { field_name, field_schema: "keyword" });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (!/already exists|already indexed|conflict/i.test(message)) throw error;
+        }
     }
 }

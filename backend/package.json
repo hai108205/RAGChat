@@ -10,6 +10,7 @@
         "start": "node dist/index.js",
         "worker": "tsx chatWorker.ts",
         "worker:integration": "tsx workers/rocketchatIntegrationWorker.ts",
+        "rag:backfill": "tsx scripts/backfillRagV1.ts",
         "test": "vitest",
         "test:ci": "vitest run",
         "test:contract": "vitest run tests/integration/rocketchat.integration.test.ts",

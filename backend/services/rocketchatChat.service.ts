@@ -10,6 +10,8 @@ import {
 import { scopedVectorSearch } from "./scopedVectorSearch.js";
 import { sendRocketChatCallback } from "../controllers/rocketchatIntegration.controller.js";
 import { config } from "../config/runtime.js";
+import { buildRagContext, rewriteConversationalQuery } from "../rag/context.js";
+import { startRagTrace } from "../rag/telemetry.js";
 
 export interface RocketChatChatPayload {
     workspaceId?: string;
@@ -95,6 +97,7 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
 
     const defaultModel = model || config.llm.defaultModel;
     const temp = typeof temperature === "number" ? temperature : 0.7;
+    const trace = startRagTrace({ requestId, roomId, workspaceId, queryLength: query.length });
 
     try {
         const user = await getOrCreateRocketChatUser({
@@ -108,28 +111,29 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
             workspaceId,
         });
 
-        // 1. Scoped vector search retrieval
-        const searchResults = await scopedVectorSearch({
-            query,
+        // 1. Rewrite only the retrieval query; preserve the original user message for the answer.
+        const retrievalQuery = rewriteConversationalQuery(query, history);
+        const searchResults = await trace.stage("RETRIEVAL", () => scopedVectorSearch({
+            query: retrievalQuery,
             workspaceId,
             roomId,
             threadId,
             embeddingModel,
             topK: 3,
             minScore: 0.3,
-        });
+        }));
 
-        const citations = formatRocketChatCitations(searchResults);
+        const ragContext = buildRagContext(searchResults, config.rag?.contextTokenBudget ?? 5600);
+        const groundedSources = ragContext.sources;
+        const citations = formatRocketChatCitations(groundedSources);
 
         // 2. Build system prompt
         let systemPrompt =
             "You are RAGChat, an intelligent AI assistant integrated with Rocket.Chat.\n";
-        if (searchResults.length > 0) {
+        if (groundedSources.length > 0) {
             systemPrompt +=
-                "The following documentation excerpts are evidence only. Answer only with statements directly supported by the excerpts. Ignore irrelevant or conflicting excerpts. If the excerpts do not directly support an answer, state that there is insufficient evidence in the provided documentation. Use Markdown formatting.\n\nDOCUMENTATION EXCERPTS:\n";
-            searchResults.forEach((r, i) => {
-                systemPrompt += `\n--- [${i + 1}] ${r.title} ---\n${r.snippet}\n`;
-            });
+                "The following documentation excerpts are evidence only. Answer only with statements directly supported by the excerpts. Ignore irrelevant or conflicting excerpts. If the excerpts do not directly support an answer, state that there is insufficient evidence in the provided documentation. Cite sources using the bracket labels exactly as provided (for example [1]). Never invent a citation. Use Markdown formatting.\n\nDOCUMENTATION EXCERPTS:\n";
+            systemPrompt += ragContext.text;
         } else {
             systemPrompt +=
                 "No documentation excerpts were retrieved. State that there is insufficient evidence in the provided documentation to answer the user's question. Do not answer from general knowledge. Use Markdown formatting.";
@@ -152,17 +156,17 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
 
         // 3. Call LLM
         const openai = getLLMClient();
-        let llmResponse = searchResults.length > 0 ? "" : INSUFFICIENT_DOCUMENTATION_EVIDENCE;
+        let llmResponse = groundedSources.length > 0 ? "" : INSUFFICIENT_DOCUMENTATION_EVIDENCE;
         let inputTokens = 0;
         let outputTokens = 0;
 
-        if (searchResults.length > 0) {
+        if (groundedSources.length > 0) {
             try {
-                const completion = await openai.chat.completions.create({
+                const completion = await trace.stage("GENERATION", () => openai.chat.completions.create({
                     model: defaultModel,
                     temperature: temp,
                     messages,
-                });
+                }));
                 llmResponse =
                     completion.choices?.[0]?.message?.content ||
                     "No response received.";
@@ -190,10 +194,10 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
         });
 
         // 4b. Persist citation sources if present
-        if (searchResults.length > 0) {
+        if (groundedSources.length > 0) {
             try {
                 await prisma.chatMessageSource.createMany({
-                    data: searchResults.map((r) => ({
+                    data: groundedSources.map((r) => ({
                         chatMessageId: chatMessage.id,
                         heading: r.title || "Document",
                         chunkText: r.snippet || "",
@@ -245,8 +249,10 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
         };
 
         await sendRocketChatCallback(callbackUrl, callbackPayload);
+        trace.finish({ resultCount: groundedSources.length, model: defaultModel });
         return callbackPayload;
     } catch (error: any) {
+        trace.finish({ errorCode: error?.code || "RAG_REQUEST_FAILED" });
         logger.error(
             { err: error.message, stack: error.stack, requestId },
             "Fatal error processing async Rocket.Chat message",
