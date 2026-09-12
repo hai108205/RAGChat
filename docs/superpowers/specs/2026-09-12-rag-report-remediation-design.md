@@ -14,7 +14,7 @@ The implementation covers:
 - Persistent room-scoped settings submitted from `RagSettingsModal` and safely applied to chat requests.
 - Tests and an operational quality-corpus template to support evidence-based threshold tuning.
 
-`RAG_V1_ENABLED` remains an explicit rollout flag. This work does not turn it on by default or delete legacy indexes.
+`RAG_V1_ENABLED` remains an explicit rollout flag. This work does not turn it on by default or delete legacy indexes. `semantic`, `keyword`, and `hybrid` room modes are supported by the deployed scoped retrieval service independently of that flag: keyword search reads the retained searchable chunks for the same scoped sources, and hybrid fuses it with whichever dense path (legacy or V1) is active. If a deployment has not applied the lexical schema/backfill, the backend explicitly rejects `keyword`/`hybrid` as unavailable and the modal presents only semantic mode; it must never silently substitute semantic or legacy behavior.
 
 ## Room settings architecture
 
@@ -30,9 +30,9 @@ type RoomRagSettings = {
 };
 ```
 
-The submit handler reads UIKit state, validates allowed enum values and prompt length, then writes this record. Settings are room-owned: only a room administrator/moderator (or app-authorized equivalent) may update them. The app loads the saved settings when opening the modal and attaches them to every room chat request. Absent settings use existing backend defaults.
+The submit handler reads UIKit state, validates allowed enum values and a maximum 1,500-character prompt, then writes this record. Settings are room-owned: only a room administrator/moderator (or app-authorized equivalent) may update them. The app loads the saved settings when opening the modal and attaches them to every room chat request. Absent settings use existing backend defaults.
 
-The backend validates the incoming override again **and does not trust it as authority**. The authenticated Rocket.Chat integration identity and signed/request-bound room and workspace identity remain authoritative; a request whose settings scope differs from the authenticated scope is rejected. It treats model and prompt as generation configuration, and `topK`, threshold, and mode as retrieval configuration. Invalid or tampered persisted values are rejected rather than silently broadened. `topK` is bounded at 15 and context construction remains constrained by its token budget.
+The backend validates the incoming override again **and does not trust it as authority**. The authenticated Rocket.Chat integration identity and signed/request-bound room and workspace identity remain authoritative; a request whose settings scope differs from the authenticated scope is rejected. It treats model and prompt as generation configuration, and `topK`, threshold, and mode as retrieval configuration. Invalid or tampered persisted values are rejected rather than silently broadened. `topK` is bounded at 15 and context construction remains constrained by its token budget; the room prompt reserves at most 512 tokens from generation context and is rejected if its 1,500-character source value exceeds that bound.
 
 ## Retrieval architecture
 
@@ -40,7 +40,7 @@ The backend validates the incoming override again **and does not trust it as aut
 
 `similarityThreshold` applies only to dense cosine candidates; it is not applied to lexical ranks or RRF scores. Keyword mode returns its bounded lexical ranking; hybrid filters the dense side first, fuses the two ranked lists, then emits the configured `topK`. This prevents incomparable score scales from being treated as one threshold.
 
-The implementation must not claim Qdrant payload filtering is BM25. Lexical search is separate and room/workspace scoped. If the existing schema lacks searchable chunk bodies, add the smallest migration/table/index necessary; do not query headings with an entire user sentence. The migration includes a versioned, idempotent backfill from active source content/segments, checkpointed retries and counts for failed records. Until a source is backfilled, hybrid returns the dense result for that source and records coverage telemetry; it must not silently broaden scope or fabricate lexical results.
+The implementation must not claim Qdrant payload filtering is BM25. Lexical search is separate and room/workspace scoped. It uses parameterized Prisma/SQL scope predicates plus a normalized, safe full-text-query constructor (for example PostgreSQL `websearch_to_tsquery`); raw user input is never interpolated into `tsquery`. Blank, malformed, or operator-only input produces a bounded empty lexical result rather than a database error. If the existing schema lacks searchable chunk bodies, add the smallest migration/table/index necessary; do not query headings with an entire user sentence. The migration includes a versioned, idempotent backfill from active source content/segments, checkpointed retries and counts for failed records. Until a source is backfilled, hybrid returns the dense result for that source and records coverage telemetry; it must not silently broaden scope or fabricate lexical results.
 
 Deduplication uses stable chunk IDs where present, falling back to a normalized content hash. It must never infer identity from a 25-character prefix.
 
@@ -74,4 +74,4 @@ Rollout is staged: dual-write and backfill first, then a limited labelled scope 
 
 ## Verification
 
-Each behavior is developed test-first. Tests cover V1 word-budget chunking, crawler vector alignment, Vietnamese rewrite detection, lexical scope/excerpts/RRF, stable deduplication, sanitized extraction, modal state validation/persistence, request propagation and backend override validation. They also cover denied settings updates, complete request-path cross-room spoofing/isolation, missing-settings fallback, and tampered persistence records. The full backend suite, typecheck, Rocket.Chat app tests/typecheck, and GitNexus change detection run before merge.
+Each behavior is developed test-first. Tests cover V1 word-budget chunking, crawler vector alignment, Vietnamese rewrite detection, lexical scope/excerpts/RRF, stable deduplication, sanitized extraction, modal state validation/persistence, request propagation and backend override validation. They also cover unavailable-mode rejection/UI hiding, the 1,500-character and 512-token prompt bounds, safe malformed lexical input, denied settings updates, complete request-path cross-room spoofing/isolation, missing-settings fallback, and tampered persistence records. The full backend suite, typecheck, Rocket.Chat app tests/typecheck, and GitNexus change detection run before merge.
