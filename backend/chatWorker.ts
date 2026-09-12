@@ -1,0 +1,444 @@
+import { Worker, type Job } from "bullmq";
+import {
+    scrapeWebpage,
+    generateVectorEmbeddings,
+    splitDocumentationContent,
+    normalizeUrl,
+    isValidDocUrl,
+} from "./utils/ragUtilities.js";
+import { qdrant, treeindex } from "./utils/ragClients.js";
+import prisma from "./utils/prismaClient.js";
+import redis, { updateChatProgress } from "./utils/redis.js";
+import Bottleneck from "bottleneck";
+import { recordIngestionJobDuration } from "./utils/metrics.js";
+import { dispatchAlert } from "./utils/notificationDispatcher.js";
+import { config } from "./config/runtime.js";
+import crypto from "node:crypto";
+import { createRagScope } from "./rag/types.js";
+import { indexRagDocumentV1 } from "./rag/ingestion.js";
+import { ensureRagCollection, getRagCollectionName } from "./rag/qdrantIndex.service.js";
+import { splitIntoSegments } from "./rag/chunking.js";
+import { upsertLexicalChunks } from "./rag/lexicalChunks.js";
+
+const normalizeDocsUrl = (docsUrl: string): string => normalizeUrl(docsUrl);
+
+const MAX_CRAWL_PAGES = 300;
+
+interface JobData {
+    chatId: string;
+    docsUrl: string;
+    collectionName?: string | null;
+    chatSourceId?: string | null;
+    isVectorLess?: boolean;
+}
+
+const processVectorLessJob = async (job: Job<JobData>, ingestionRunId?: string): Promise<void> => {
+    const { chatId, docsUrl, chatSourceId } = job.data;
+    const normalizedDocsUrl = normalizeDocsUrl(docsUrl);
+
+    await updateChatProgress(chatId, {
+        status: "PROCESSING",
+        total: 100,
+        current: 0,
+        progress: 0,
+    });
+
+    const rootPage = await scrapeWebpage(normalizedDocsUrl, normalizedDocsUrl);
+    const pagesToScrape = [
+        normalizedDocsUrl,
+        ...rootPage.internalLinks.filter((url) => url !== normalizedDocsUrl),
+    ].slice(0, MAX_CRAWL_PAGES);
+
+    const totalPages = pagesToScrape.length;
+    let indexedPages = 0;
+    let scrapedData = "";
+
+    await updateChatProgress(chatId, {
+        status: "PROCESSING",
+        total: totalPages,
+        current: 0,
+        progress: 0,
+    });
+
+    for (const url of pagesToScrape) {
+        const { body } = await scrapeWebpage(url, normalizedDocsUrl);
+        if (body) {
+            scrapedData += `\n\n--- Page: ${url} ---\n${body}`;
+        }
+        indexedPages++;
+        await updateChatProgress(chatId, {
+            status: "PROCESSING",
+            total: totalPages,
+            current: indexedPages,
+            progress: Math.round((indexedPages / totalPages) * 70), // Scrape takes up to 70%
+        });
+    }
+
+    // Step 2: Generate Tree using treeindex
+    await updateChatProgress(chatId, {
+        status: "PROCESSING",
+        total: 100,
+        current: 75,
+        progress: 75,
+        stage: "Generating document tree structure...",
+    });
+
+    treeindex.loadData(scrapedData);
+    const generatedTree = await treeindex.generateTree();
+
+    const documentTree = await prisma.documentTree.create({
+        data: {
+            treeData: generatedTree as any,
+            sourceData: scrapedData,
+            chatSourceId: chatSourceId!,
+        },
+    });
+
+    // Update Chat and ChatSource
+    await prisma.chatSource.update({
+        where: { id: chatSourceId! },
+        data: {
+            lastIndexedAt: new Date(),
+            totalPages,
+        },
+    });
+
+    await prisma.chat.update({
+        where: { id: chatId },
+        data: {
+            status: "READY",
+            collectionName: documentTree.id,
+        },
+    });
+
+    if (ingestionRunId) {
+        await prisma.ingestionRun.update({
+            where: { id: ingestionRunId },
+            data: {
+                status: "SUCCESS",
+                finishedAt: new Date(),
+                pagesCrawled: indexedPages,
+                pagesFailed: totalPages - indexedPages,
+            },
+        });
+    }
+
+    await updateChatProgress(chatId, {
+        status: "READY",
+        total: totalPages,
+        current: totalPages,
+        progress: 100,
+    });
+};
+
+const processVectorJob = async (job: Job<JobData>, ingestionRunId?: string): Promise<void> => {
+    const { chatId, docsUrl, collectionName, chatSourceId } = job.data;
+    const normalizedDocsUrl = normalizeDocsUrl(docsUrl);
+
+    if (!collectionName) {
+        throw new Error("Missing collectionName for vector ingestion job");
+    }
+
+    const useRagV1 = config.rag.v1Enabled;
+    const embeddingModel = config.llm.embeddingModel;
+    const embeddingDimensions = embeddingModel.includes("text-embedding-3-large") ? 3072 : 1536;
+    const ragCollectionName = getRagCollectionName(config.rag.indexVersion, embeddingModel, embeddingDimensions);
+    if (!useRagV1 || config.rag.dualWriteEnabled) {
+        await qdrant.createCollection(collectionName, {
+            vectors: { size: embeddingDimensions, distance: "Cosine" },
+        });
+    }
+    if (useRagV1) await ensureRagCollection(qdrant, ragCollectionName, embeddingDimensions);
+
+    const pagesToScrape: string[] = [];
+    const scrapedPages = new Set<string>();
+
+    const rootPage = await scrapeWebpage(normalizedDocsUrl, normalizedDocsUrl);
+    pagesToScrape.push(normalizedDocsUrl);
+    scrapedPages.add(normalizedDocsUrl);
+
+    for (const link of rootPage.internalLinks) {
+        if (!scrapedPages.has(link) && isValidDocUrl(link, normalizedDocsUrl)) {
+            pagesToScrape.push(link);
+            scrapedPages.add(link);
+        }
+    }
+
+    const pagesToProcess = pagesToScrape.slice(0, MAX_CRAWL_PAGES);
+    const totalPages = pagesToProcess.length;
+
+    await updateChatProgress(chatId, {
+        status: "PROCESSING",
+        total: totalPages,
+        current: 0,
+        progress: 0,
+    });
+
+    const limiter = new Bottleneck({
+        maxConcurrent: 5,
+        minTime: 200,
+    });
+
+    let indexedPages = 0;
+    let failedPages = 0;
+
+    const scrapeAndIndexPage = limiter.wrap(async (url: string) => {
+        try {
+            const { body, title } = await scrapeWebpage(url, normalizedDocsUrl);
+            if (!body) return;
+
+            // Legacy splitter is character based (1 token ≈ 4 characters)
+            const legacyCharacterChunkSize = 1000;
+            const legacyCharacterChunkOverlap = 150;
+            const chunks = splitDocumentationContent(body, {
+                chunkSize: legacyCharacterChunkSize,
+                chunkOverlap: legacyCharacterChunkOverlap,
+            });
+
+            if (chunks.length === 0) return;
+
+            const ragSegments = useRagV1
+                ? await splitIntoSegments({
+                    text: body,
+                    documentType: "html",
+                    locator: url,
+                    metadata: { title, sourceUrl: url },
+                    options: { chunkSize: config.rag.chunkSizeTokens, chunkOverlap: config.rag.chunkOverlapTokens },
+                })
+                : [];
+            if (useRagV1 && ragSegments.length === 0) return;
+
+            const v1Embeddings = (useRagV1 && ragSegments.length > 0)
+                ? (await generateVectorEmbeddings(
+                    ragSegments.map((s) => s.content),
+                    { model: embeddingModel, dimensions: embeddingDimensions },
+                )) as number[][]
+                : [];
+
+            const legacyEmbeddings = (!useRagV1 || config.rag.dualWriteEnabled)
+                ? (await generateVectorEmbeddings(
+                    chunks.map((c) => c.content),
+                    { model: embeddingModel, dimensions: embeddingDimensions },
+                )) as number[][]
+                : [];
+
+            if (useRagV1) {
+                await indexRagDocumentV1({
+                    sourceId: chatSourceId!,
+                    sourceUrl: url,
+                    filename: title || url,
+                    documentType: "html",
+                    content: body,
+                    embeddingModel,
+                    dimensions: embeddingDimensions,
+                    indexVersion: config.rag.indexVersion,
+                    scope: createRagScope({ kind: "web", chatId }),
+                    chunks: ragSegments.map((chunk) => ({
+                        content: chunk.content,
+                        locator: chunk.metadata.locator,
+                        metadata: chunk.metadata,
+                    })),
+                    embeddings: v1Embeddings,
+                }, { prisma, qdrant });
+            }
+
+            if (!useRagV1 || config.rag.dualWriteEnabled) {
+                await qdrant.upsert(collectionName, {
+                    wait: true,
+                    points: chunks.map((chunk, index) => ({
+                        id: crypto.randomUUID(),
+                        vector: legacyEmbeddings[index],
+                        payload: {
+                            url,
+                            title,
+                            heading: chunk.heading,
+                            body: chunk.content,
+                            chatSourceId,
+                            hasCodeBlock: chunk.hasCodeBlock,
+                            chunkType: chunk.chunkType,
+                        },
+                    })),
+                });
+
+                if (!useRagV1) {
+                    await upsertLexicalChunks(
+                        chunks.map((chunk, index) => ({
+                            chatSourceId: chatSourceId!,
+                            chunkId: `${chatSourceId}_chunk_${index}_${crypto.createHash("sha256").update(url).digest("hex").slice(0, 8)}`,
+                            chunkIndex: index,
+                            content: chunk.content,
+                            contentHash: crypto.createHash("sha256").update(chunk.content).digest("hex"),
+                            locator: url,
+                            heading: chunk.heading || title || "Untitled Page",
+                            pageUrl: url,
+                            metadata: {
+                                hasCodeBlock: chunk.hasCodeBlock,
+                                chunkType: chunk.chunkType,
+                            },
+                        })),
+                        { prisma },
+                    );
+                }
+            }
+
+            await prisma.documentPage.create({
+                data: {
+                    pageUrl: url,
+                    heading: title || "Untitled Page",
+                    chatSourceId: chatSourceId!,
+                },
+            });
+
+            indexedPages++;
+            const progress = Math.round((indexedPages / totalPages) * 100);
+
+            await updateChatProgress(chatId, {
+                status: "PROCESSING",
+                total: totalPages,
+                current: indexedPages,
+                progress,
+            });
+        } catch (err) {
+            console.error(`Failed to process page: ${url}`, err);
+            failedPages++;
+        }
+    });
+
+    await Promise.all(pagesToProcess.map((url) => scrapeAndIndexPage(url)));
+
+    if (indexedPages === 0) {
+        throw new Error("No pages could be indexed from the provided documentation URL.");
+    }
+
+    await prisma.chatSource.update({
+        where: { id: chatSourceId! },
+        data: {
+            totalPages: indexedPages,
+            lastIndexedAt: new Date(),
+        },
+    });
+
+    await prisma.chat.update({
+        where: { id: chatId },
+        data: {
+            status: "READY",
+            failedAt: null,
+            failureReason: null,
+        },
+    });
+
+    if (ingestionRunId) {
+        await prisma.ingestionRun.update({
+            where: { id: ingestionRunId },
+            data: {
+                status: "SUCCESS",
+                finishedAt: new Date(),
+                pagesCrawled: indexedPages,
+                pagesFailed: failedPages,
+            },
+        });
+    }
+
+    await updateChatProgress(chatId, {
+        status: "READY",
+        total: totalPages,
+        current: indexedPages,
+        progress: 100,
+    });
+};
+
+const worker = new Worker(
+    "chatCreation",
+    async (job: Job<JobData>) => {
+        const { chatId, chatSourceId } = job.data;
+        const isVectorLess = Boolean(job.data.isVectorLess);
+        const jobStartTime = Date.now();
+
+        await prisma.chat.update({
+            where: { id: chatId },
+            data: { status: "PROCESSING" },
+        });
+
+        const ingestionRun = await prisma.ingestionRun.create({
+            data: {
+                chatId,
+                chatSourceId: chatSourceId!,
+                status: "STARTED",
+                startedAt: new Date(),
+            },
+        });
+
+        try {
+            if (isVectorLess) {
+                await processVectorLessJob(job, ingestionRun.id);
+            } else {
+                await processVectorJob(job, ingestionRun.id);
+            }
+
+            const durationSeconds = (Date.now() - jobStartTime) / 1000;
+            await recordIngestionJobDuration(durationSeconds);
+        } catch (error: any) {
+            await prisma.chat.update({
+                where: { id: chatId },
+                data: {
+                    status: "FAILED",
+                    failedAt: new Date(),
+                    failureReason: error.message || "Unknown error during ingestion",
+                },
+            });
+
+            await prisma.ingestionRun.update({
+                where: { id: ingestionRun.id },
+                data: {
+                    status: "FAILED",
+                    finishedAt: new Date(),
+                    errorCode: error.code || "INGESTION_ERROR",
+                    errorMessage: error.message || "Unknown error",
+                },
+            });
+
+            await updateChatProgress(chatId, {
+                status: "FAILED",
+                progress: 0,
+                failureReason: error.message || "Unknown error during ingestion",
+            });
+
+            throw error;
+        }
+    },
+    {
+        connection: redis as any,
+        concurrency: 5,
+    },
+);
+
+worker.on("completed", (job: Job) => {
+    console.log(`Job completed: ${job.id}`);
+});
+
+worker.on("failed", async (job: Job | undefined, err: Error) => {
+    console.error(`Job failed: ${job?.id}`, err);
+
+    if (job?.attemptsMade && job.opts?.attempts && job.attemptsMade >= job.opts.attempts) {
+        await dispatchAlert({
+            type: "ingestion_failure",
+            title: `Ingestion Job Failed Permanently: ${job.id}`,
+            message: `Job ${job.id} failed after ${job.attemptsMade} attempts. Error: ${err.message}`,
+            severity: "critical",
+            source: "worker",
+        });
+    }
+});
+
+worker.on("stalled", (jobId: string) => {
+    console.warn(`Job stalled: ${jobId}`);
+});
+
+async function shutdownWorker() {
+    console.log("Shutting down worker...");
+    await worker.close();
+    process.exit(0);
+}
+
+process.on("SIGINT", shutdownWorker);
+process.on("SIGTERM", shutdownWorker);

@@ -1,6 +1,6 @@
 {
     "id": "8a800b09-3cc1-4bc1-8dbf-12592fc223eb",
-    "version": "0.0.1",
+    "version": "0.0.4",
     "requiredApiVersion": "^1.44.0",
     "iconFile": "icon.png",
     "author": {
@@ -15,16 +15,45 @@
     "implements": [
         "IPostMessageSentToBot",
         "IPostMessageSent",
-        "IPreFileUpload"
+        "IPreFileUpload",
+        "IUIKitInteractionHandler"
     ],
     "permissions": [
-        { "name": "user.read" },
-        { "name": "user.write" },
-        { "name": "message.read" },
-        { "name": "message.write" },
-        { "name": "networking" },
-        { "name": "persistence" },
-        { "name": "slashcommand" },
-        { "name": "upload.read" }
+        {
+            "name": "user.read"
+        },
+        {
+            "name": "user.write"
+        },
+        {
+            "name": "room.read"
+        },
+        {
+            "name": "message.read"
+        },
+        {
+            "name": "message.write"
+        },
+        {
+            "name": "networking"
+        },
+        {
+            "name": "persistence"
+        },
+        {
+            "name": "slashcommand"
+        },
+        {
+            "name": "upload.read"
+        },
+        {
+            "name": "api"
+        },
+        {
+            "name": "ui.interact"
+        },
+        {
+            "name": "ui.registerButtons"
+        }
     ]
 }

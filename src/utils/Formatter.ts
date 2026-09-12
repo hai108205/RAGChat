@@ -1,5 +1,4 @@
 import { IMessageAttachment } from '@rocket.chat/apps-engine/definition/messages';
-import { IModify, IRead } from '@rocket.chat/apps-engine/definition/accessors';
 
 export interface CitationSource {
     title: string;
@@ -8,11 +7,20 @@ export interface CitationSource {
     relevance?: number;
 }
 
+/**
+ * Message formatting utilities for markdown rendering and rich IMessageAttachments.
+ */
 export class Formatter {
+    /**
+     * Formats standard slash command usage syntax.
+     */
     public static usageCommand(command: string, example: string): string {
         return `**Usage:** \`/${command} ${example}\``;
     }
 
+    /**
+     * Formats retrieved citation sources into a structured, styled Rocket.Chat IMessageAttachment.
+     */
     public static formatSources(sources: CitationSource[]): IMessageAttachment {
         if (sources.length === 0) {
             return {
@@ -23,7 +31,7 @@ export class Formatter {
         }
 
         const fields = sources.slice(0, 5).map((source, index) => ({
-            title: `Source ${index + 1}${source.relevance ? ` (${Math.round(source.relevance * 100)}%)` : ''}`,
+            title: `Source ${index + 1}${this.relevanceLabel(source.relevance)}`,
             value: [
                 `**${source.title}**${source.page ? ` — Page ${source.page}` : ''}`,
                 `> ${source.snippet.slice(0, 300)}`,
@@ -38,6 +46,18 @@ export class Formatter {
             fields,
             collapsed: false,
         };
+    }
+
+    /**
+     * Render the relevance percentage. The backend reports cosine similarity
+     * in the 0.0–1.0 range; a missing/NaN/falsy value renders no label rather
+     * than `NaN%`.
+     */
+    private static relevanceLabel(relevance: number | undefined): string {
+        if (typeof relevance !== 'number' || Number.isNaN(relevance)) {
+            return '';
+        }
+        return ` (${Math.round(relevance * 100)}%)`;
     }
 
     public static formatHelpMessage(): string {

@@ -1,0 +1,2 @@
+SENTINEL_PARSER_TEST_CONTENT_TXT
+This is a plain text test document.

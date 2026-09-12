@@ -1,18 +1,39 @@
+# ============================================================================
+# CD — Continuous Delivery
+# ----------------------------------------------------------------------------
+# Tự động build Docker image khi tạo tag phiên bản (`v*`, ví dụ `v1.0.0`).
+#
+# Điều kiện trigger:
+#   - `push` tag: mỗi khi push một tag bắt đầu bằng `v`, ví dụ
+#     `git tag v1.0.0 && git push origin v1.0.0`.
+#
+# Lưu ý: Workflow này CHỈ BUILD image cục bộ trên runner. Muốn deploy thật,
+# cần thêm bước push image lên registry (Docker Hub / GHCR) và skeleton
+# deployment (k8s, docker compose, ...). Phần đó nên là bước tiếp theo.
+#
+# Các tag được đặt tên:
+#   - `${{ github.ref_name }}` = tên tag, được dùng luôn làm nhãn image,
+#     ví dụ tag `v1.0.0` → image `ragchat-backend:v1.0.0`.
+# ============================================================================
 name: CD
 
 on:
   push:
     tags: ["v*"]
 
+# Job `build-images`: build image cho cả backend và app Rocket.Chat.
 jobs:
   build-images:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Lấy mã nguồn (chứa Dockerfile) của tag đang build.
       - uses: actions/checkout@v4
 
+      # 2. Build image backend Python (RAG pipeline) từ `backend/Dockerfile`.
       - name: Build backend image
         run: docker build -f backend/Dockerfile -t ragchat-backend:${{ github.ref_name }} .
 
+      # 3. Build image app Rocket.Chat từ `docker/Dockerfile.app`.
       - name: Build app image
         run: docker build -f docker/Dockerfile.app -t ragchat-app:${{ github.ref_name }} .

@@ -1,3 +1,15 @@
+# ============================================================================
+# CI App — Rocket.Chat App (frontend TypeScript)
+# ----------------------------------------------------------------------------
+# Chạy kiểm tra kiểu (typecheck) cho app Rocket.Chat (React Native).
+# Chỉ chạy khi có file frontend bị thay đổi (`paths`), tránh chạy khi không cần.
+#
+# Các bước chính:
+#   1. Checkout mã nguồn.
+#   2. Cài Node.js 20 (có cache `npm` để push nhanh lại lần chạy kế).
+#   3. `npm ci` — cài dependency theo khóa `package-lock.json` (kết quả tái lập).
+#   4. `npx tsc --noEmit` — kiểm tra kiểu, KHÔNG tạo file build.
+# ============================================================================
 name: CI App
 
 on:
@@ -20,21 +32,27 @@ on:
       - "tsconfig.json"
       - ".rcappsconfig"
 
+# Job `typecheck`: kiểm tra xem mã TypeScript có hợp lệ hay không.
 jobs:
   typecheck:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Lấy mã nguồn của commit đang chạy về máy ảo.
       - uses: actions/checkout@v4
 
+      # 2. Thiết lập môi trường Node.js; `cache: npm` tự lưu node_modules
+      #    giữa các lần chạy để tăng tốc cài đặt.
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
 
+      # 3. Cài đúng các dependency khóa sẵn trong lockfile (reproducible build).
       - name: Install dependencies
         run: npm ci
 
+      # 4. Chạy TypeScript compiler ở chế độ "chỉ báo lỗi" (không emit).
       - name: Typecheck TypeScript
         run: npx tsc --noEmit

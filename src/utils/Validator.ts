@@ -1,4 +1,17 @@
+/**
+ * Coerces unknown input to non-empty string or returns fallback.
+ */
+export function asNonEmptyString(value: unknown, fallback: string): string {
+    return typeof value === 'string' && value.trim() ? value : fallback;
+}
+
+/**
+ * Validation and sanitization helpers for URL verification and string normalization.
+ */
 export class Validator {
+    /**
+     * Validates whether a string is a well-formed http or https URL.
+     */
     public static isValidUrl(url: string): boolean {
         try {
             const parsed = new URL(url);
@@ -8,11 +21,27 @@ export class Validator {
         }
     }
 
+    /**
+     * Type guard verifying that value is a non-empty string.
+     */
     public static isNonEmptyString(value: unknown): value is string {
         return typeof value === 'string' && value.trim().length > 0;
     }
 
-    public static sanitizeInput(input: string): string {
+    /**
+     * Coerces unknown input to non-empty string or returns fallback.
+     */
+    public static asNonEmptyString(value: unknown, fallback: string): string {
+        return asNonEmptyString(value, fallback);
+    }
+
+    /**
+     * Sanitizes user input string by trimming and enforcing max length.
+     */
+    public static sanitizeInput(input: string | any): string {
+        if (typeof input !== 'string') {
+            return typeof input === 'number' || typeof input === 'boolean' ? String(input) : '';
+        }
         return input.trim().slice(0, 4000);
     }
 }
