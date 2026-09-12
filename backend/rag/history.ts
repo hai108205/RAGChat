@@ -5,12 +5,47 @@ export interface ConversationHistoryMessage {
     content?: string;
 }
 
-function countApproximateTokens(messages: BaseMessage[]): number {
-    return messages.reduce((total, message) => {
-        const content = typeof message.content === "string" ? message.content : "";
-        return total + (content.trim() ? content.trim().split(/\s+/u).length : 0);
-    }, 0);
+function extractMessageContent(message: BaseMessage): string {
+    if (typeof message.content === "string") {
+        return message.content;
+    }
+    if (Array.isArray(message.content)) {
+        return message.content
+            .map((part) => {
+                if (typeof part === "string") return part;
+                if (part && typeof part === "object" && "text" in part && typeof (part as { text?: unknown }).text === "string") {
+                    return (part as { text: string }).text;
+                }
+                return "";
+            })
+            .filter(Boolean)
+            .join(" ");
+    }
+    return "";
 }
+
+/**
+ * Standardized heuristic token estimation function consistent with LangChain specification:
+ * - Supports BaseMessage[], a single BaseMessage, or raw string.
+ * - Parses text from nested content structures (e.g., multimodal blocks).
+ * - Implements the ~4 characters per token heuristic for fast, offline, dependency-free estimation.
+ */
+export function countTokensApproximately(messageOrText: BaseMessage | BaseMessage[] | string): number {
+    if (typeof messageOrText === "string") {
+        const text = messageOrText.trim();
+        if (!text) return 0;
+        return Math.max(1, Math.ceil(text.length / 4));
+    }
+    if (Array.isArray(messageOrText)) {
+        return messageOrText.reduce((total, msg) => total + countTokensApproximately(msg), 0);
+    }
+    const text = extractMessageContent(messageOrText).trim();
+    if (!text) return 0;
+    return Math.max(1, Math.ceil(text.length / 4));
+}
+
+// Backward-compatible alias
+export const countApproximateTokens = countTokensApproximately;
 
 /** Preserves complete recent turns without passing raw unbounded history to the model. */
 export async function trimHistoryForGeneration(
@@ -26,7 +61,7 @@ export async function trimHistoryForGeneration(
     }
     return trimMessages(messages, {
         maxTokens,
-        tokenCounter: countApproximateTokens,
+        tokenCounter: countTokensApproximately,
         strategy: "last",
         startOn: "human",
     });
