@@ -13,10 +13,12 @@ import Bottleneck from "bottleneck";
 import { recordIngestionJobDuration } from "./utils/metrics.js";
 import { dispatchAlert } from "./utils/notificationDispatcher.js";
 import { config } from "./config/runtime.js";
+import crypto from "node:crypto";
 import { createRagScope } from "./rag/types.js";
 import { indexRagDocumentV1 } from "./rag/ingestion.js";
 import { ensureRagCollection, getRagCollectionName } from "./rag/qdrantIndex.service.js";
 import { splitIntoSegments } from "./rag/chunking.js";
+import { upsertLexicalChunks } from "./rag/lexicalChunks.js";
 
 const normalizeDocsUrl = (docsUrl: string): string => normalizeUrl(docsUrl);
 
@@ -245,6 +247,24 @@ const processVectorJob = async (job: Job<JobData>, ingestionRunId?: string): Pro
                         },
                     })),
                 });
+
+                await upsertLexicalChunks(
+                    chunks.map((chunk, index) => ({
+                        chatSourceId: chatSourceId!,
+                        chunkId: `${chatSourceId}_chunk_${index}_${crypto.createHash("sha256").update(url).digest("hex").slice(0, 8)}`,
+                        chunkIndex: index,
+                        content: chunk.content,
+                        contentHash: crypto.createHash("sha256").update(chunk.content).digest("hex"),
+                        locator: url,
+                        heading: chunk.heading || title || "Untitled Page",
+                        pageUrl: url,
+                        metadata: {
+                            hasCodeBlock: chunk.hasCodeBlock,
+                            chunkType: chunk.chunkType,
+                        },
+                    })),
+                    { prisma },
+                );
             }
 
             await prisma.documentPage.create({

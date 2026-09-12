@@ -31,6 +31,7 @@ import { createRagScope } from "../rag/types.js";
 import { indexRagDocumentV1 } from "../rag/ingestion.js";
 import { getRagCollectionName, ensureRagCollection } from "../rag/qdrantIndex.service.js";
 import { splitParsedDocumentSegments } from "../rag/chunking.js";
+import { upsertLexicalChunks } from "../rag/lexicalChunks.js";
 
 export interface Base64IngestionInput {
     workspaceId?: string;
@@ -261,6 +262,24 @@ export async function ingestBase64Document(
                     },
                 })),
             });
+
+            await upsertLexicalChunks(
+                chunks.map((chunk, index) => ({
+                    chatSourceId: source.id,
+                    chunkId: `${source.id}_chunk_${index}`,
+                    chunkIndex: index,
+                    content: chunk.content,
+                    contentHash: crypto.createHash("sha256").update(chunk.content).digest("hex"),
+                    locator: `chunk:${index}`,
+                    heading: chunk.heading || normalizedFilename,
+                    pageUrl: sourceUrl,
+                    metadata: {
+                        chunkType: chunk.chunkType,
+                        hasCodeBlock: chunk.hasCodeBlock,
+                    },
+                })),
+                { prisma },
+            );
         }
 
         // 10. Persist DocumentPage metadata

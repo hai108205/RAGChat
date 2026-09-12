@@ -11,6 +11,7 @@
         "worker": "tsx chatWorker.ts",
         "worker:integration": "tsx workers/rocketchatIntegrationWorker.ts",
         "rag:backfill": "tsx scripts/backfillRagV1.ts",
+        "rag:backfill-lexical": "tsx scripts/backfillLexicalChunks.ts",
         "rag:evaluate-quality": "tsx scripts/evaluateRagQuality.ts",
         "test": "vitest",
         "test:ci": "vitest run",

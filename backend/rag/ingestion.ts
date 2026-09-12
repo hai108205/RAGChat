@@ -1,6 +1,7 @@
 import { createChunkId, createContentHash, createDocumentVersion, createRagDocumentId, normalizeDocumentContent } from "./documentIdentity.js";
 import { RagStageError, type RagScope } from "./types.js";
 import { ensureRagCollection, getRagCollectionName } from "./qdrantIndex.service.js";
+import { upsertLexicalChunks } from "./lexicalChunks.js";
 
 export interface RagChunkCandidate {
     content: string;
@@ -108,6 +109,9 @@ export interface RagIndexDependencies {
             update: (...args: any[]) => Promise<any>;
         };
         ragChunk: { createMany: (...args: any[]) => Promise<any> };
+        ragLexicalChunk?: {
+            upsert?: (...args: any[]) => Promise<any>;
+        };
     };
     qdrant: {
         getCollection: (name: string) => Promise<unknown>;
@@ -170,6 +174,24 @@ export async function indexRagDocumentV1(
                 })),
                 skipDuplicates: true,
             });
+        }
+        if (dependencies.prisma.ragLexicalChunk?.upsert) {
+            await upsertLexicalChunks(
+                points.map((point) => ({
+                    chatSourceId: input.sourceId,
+                    chunkId: point.id,
+                    chunkIndex: Number(point.payload.chunkIndex),
+                    content: String(point.payload.body || point.payload.content || ""),
+                    contentHash: String(point.payload.contentHash || ""),
+                    locator: String(point.payload.locator || ""),
+                    heading: typeof point.payload.heading === "string" ? point.payload.heading : undefined,
+                    pageUrl: typeof point.payload.pageUrl === "string" ? point.payload.pageUrl : typeof point.payload.sourceUrl === "string" ? point.payload.sourceUrl : undefined,
+                    documentId: record.id,
+                    versionHash: manifest.versionHash,
+                    metadata: point.payload,
+                })),
+                { prisma: dependencies.prisma as any },
+            );
         }
         await dependencies.prisma.ragDocument.update({
             where: { id: record.id },

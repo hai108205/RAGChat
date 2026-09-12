@@ -17,3 +17,19 @@ Web and Rocket.Chat retrieval first use active v1 manifests and a Qdrant scope f
 Each chat request emits a redacted RAG trace with stage latencies for retrieval and generation. Stage-specific failures use `RagStageError` where the new ingestion/index path can identify chunk, embedding, or vector-store failures. Roll out by enabling dual-write, verifying v1 retrieval and citation quality, then enabling dual-read and finally disabling the legacy fallback.
 
 `pnpm rag:evaluate-quality` is a fail-closed release gate. Its human-labelled corpus must include at least 50 cases, scope and citation observations, legacy baseline Recall@10/MRR@10/error-rate/p95 latency, and v1 observed error-rate/p95 latency. The command does not manufacture production measurements.
+
+## Lexical Chunks & Hybrid Search Rollout
+
+To support scoped keyword and hybrid retrieval (`RAG_LEXICAL_RETRIEVAL_ENABLED="true"`), searchable chunks are retained in PostgreSQL (`RagLexicalChunk`) with a `to_tsvector('simple', content)` GIN index:
+
+1. **Dual-write phase**: Active ingesting paths (Rocket.Chat file uploads and web crawling) persist lexical chunks alongside vector embeddings immediately.
+2. **Backfill phase**: Run `pnpm rag:backfill-lexical` (with optional `RAG_LEXICAL_BACKFILL_CHECKPOINT` and `RAG_LEXICAL_BACKFILL_LIMIT`) to scroll existing active Qdrant collections and populate `RagLexicalChunk` records with resume capability.
+3. **Quality-gate verification**: Run `pnpm rag:evaluate-quality` to confirm Recall@10 and MRR@10 meet or exceed thresholds with zero scope leaks and no citation hallucinations.
+4. **Activation**: Enable `RAG_LEXICAL_RETRIEVAL_ENABLED="true"` in production environment. If disabled or backfill is incomplete, rooms fall back to dense-only semantic search rather than failing.
+
+### Rollback Triggers
+
+- **Scope Leak**: Any cross-room or cross-workspace match immediately triggers disabling `RAG_LEXICAL_RETRIEVAL_ENABLED="false"`.
+- **Quality Regression**: If Recall@10 / MRR@10 drops below baseline or citation validity fails, revert to semantic search.
+- **Database Load / Latency**: If PostgreSQL FTS latency p95 breaches SLA (> 250ms), revert search mode to `semantic`.
+

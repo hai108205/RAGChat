@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createRagScope } from "../../rag/types.js";
-import { buildRagPoints, type RagChunkCandidate } from "../../rag/ingestion.js";
+import { buildRagPoints, indexRagDocumentV1, type RagChunkCandidate } from "../../rag/ingestion.js";
 
 describe("RAG ingestion point builder", () => {
     const scope = createRagScope({ kind: "rocketchat", workspaceId: "ws", roomId: "room", threadId: "thread" });
@@ -68,5 +68,66 @@ describe("RAG ingestion point builder", () => {
             chunks: [{ content: "text", locator: "document" }],
             embeddings: [[1]],
         })).toThrow(/dimensions/);
+    });
+
+    it("persists lexical chunks alongside vector points during v1 indexing", async () => {
+        const upsertMock = vi.fn().mockResolvedValue({ id: "lex-1" });
+        const createDocumentMock = vi.fn().mockResolvedValue({ id: "doc-1", collectionName: "rag_v1_model_2", versionHash: "vh" });
+        const updateDocumentMock = vi.fn().mockResolvedValue({});
+        const createManyChunkMock = vi.fn().mockResolvedValue({ count: 2 });
+        const findUniqueMock = vi.fn().mockResolvedValue(null);
+
+        const deps = {
+            prisma: {
+                ragDocument: {
+                    findUnique: findUniqueMock,
+                    create: createDocumentMock,
+                    update: updateDocumentMock,
+                },
+                ragChunk: {
+                    createMany: createManyChunkMock,
+                },
+                ragLexicalChunk: {
+                    upsert: upsertMock,
+                },
+            },
+            qdrant: {
+                getCollection: vi.fn().mockResolvedValue({}),
+                createCollection: vi.fn().mockResolvedValue({}),
+                createPayloadIndex: vi.fn().mockResolvedValue({}),
+                upsert: vi.fn().mockResolvedValue({}),
+            },
+        };
+
+        const res = await indexRagDocumentV1({
+            sourceId: "src-1",
+            sourceUrl: "https://src",
+            filename: "file.md",
+            documentType: "markdown",
+            content: "First line.\n\nSecond line.",
+            embeddingModel: "model",
+            dimensions: 2,
+            indexVersion: "v1",
+            scope,
+            chunks: [
+                { content: "First line.", locator: "line:1" },
+                { content: "Second line.", locator: "line:2" },
+            ],
+            embeddings: [[1, 0], [0, 1]],
+        }, deps);
+
+        expect(res.alreadyIndexed).toBe(false);
+        expect(upsertMock).toHaveBeenCalledTimes(2);
+        expect(upsertMock).toHaveBeenCalledWith(expect.objectContaining({
+            where: expect.objectContaining({
+                chatSourceId_chunkId: expect.objectContaining({
+                    chatSourceId: "src-1",
+                }),
+            }),
+            create: expect.objectContaining({
+                content: "First line.",
+                chatSourceId: "src-1",
+            }),
+        }));
     });
 });
