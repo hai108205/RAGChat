@@ -46,6 +46,9 @@ export function createRoomRagCapabilities({
 
 const isAllowed = <T>(value: unknown, choices: readonly T[]): value is T => choices.includes(value as T);
 
+const truncatePromptToTokenBudget = (prompt: string): string =>
+    (prompt.match(/\S+/gu) || []).slice(0, ROOM_RAG_PROMPT_TOKEN_BUDGET).join(" ");
+
 export function parseRoomRagSettings(input: unknown, capabilities: RoomRagCapabilities): RoomRagSettings {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
         throw new Error("Room RAG settings must be an object");
@@ -85,7 +88,7 @@ export function parseRoomRagSettings(input: unknown, capabilities: RoomRagCapabi
         searchMode: settings.searchMode,
         topK: settings.topK,
         threshold: settings.threshold,
-        prompt: settings.prompt,
+        prompt: truncatePromptToTokenBudget(settings.prompt),
         promptTokenBudget: ROOM_RAG_PROMPT_TOKEN_BUDGET,
     });
 }

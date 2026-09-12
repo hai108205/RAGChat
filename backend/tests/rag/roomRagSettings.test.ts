@@ -43,6 +43,15 @@ describe("room RAG settings", () => {
         expect(Object.isFrozen(settings)).toBe(true);
     });
 
+    it("truncates an accepted source prompt to its deterministic 512-token representation", () => {
+        const sourcePrompt = "a ".repeat(513).trim();
+        const settings = parseRoomRagSettings(validSettings({ prompt: sourcePrompt }), lexicalCapabilities);
+
+        expect(sourcePrompt).toHaveLength(1025);
+        expect(settings.prompt.trim().split(/\s+/u)).toHaveLength(ROOM_RAG_PROMPT_TOKEN_BUDGET);
+        expect(settings.prompt).toBe(sourcePrompt.split(/\s+/u).slice(0, ROOM_RAG_PROMPT_TOKEN_BUDGET).join(" "));
+    });
+
     it("rejects unavailable lexical modes rather than falling back to semantic", () => {
         expect(() => parseRoomRagSettings(validSettings({ searchMode: "keyword" }), semanticOnlyCapabilities))
             .toThrow(/not available/i);
