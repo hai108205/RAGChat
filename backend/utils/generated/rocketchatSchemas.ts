@@ -42,6 +42,7 @@ export const rocketchatAsyncMessageSchema = {
         embeddingModel: z.string().regex(/^[a-zA-Z0-9_./-]+$/, "Invalid embedding model identifier").refine((val) => !val || ALLOWED_EMBEDDING_MODELS.some((m) => val.includes(m) || m.includes(val)), { message: "Unsupported embedding model" }).optional(),
         temperature: temperatureSchema,
         callbackUrl: z.string().optional().nullable(),
+        roomSettings: z.record(z.string(), z.unknown()).optional().nullable(),
     }),
 };
 

@@ -19,6 +19,7 @@ import { selectGroundedCandidates } from "../utils/retrievalQuality.js";
 import { createRagScope } from "../rag/types.js";
 import { resolveLegacyReadDecision, searchRagV1 } from "../rag/retrieval.js";
 import { searchLexical, fuseRankingsRrf } from "../rag/lexicalRetrieval.js";
+import { recordRagRetrievalDuration, recordRagRetrievalOutcome } from "../rag/telemetry.js";
 
 export interface ScopedVectorSearchInput {
     query: string;
@@ -46,6 +47,8 @@ export interface ScopedVectorSearchInput {
     legacySourceIds?: readonly string[];
     /** Internal guard used while reading the legacy index during migration. */
     __skipRagV1?: boolean;
+    /** Internal guard to prevent sub-queries from double-recording telemetry. */
+    __isInternalSearch?: boolean;
 }
 
 export interface ScopedSearchResult {
@@ -154,6 +157,31 @@ function deduplicateAndRankVectorResults(
 export async function scopedVectorSearch(
     input: ScopedVectorSearchInput,
 ): Promise<ScopedSearchResult[]> {
+    const startedAt = Date.now();
+    const isInternal = Boolean(input.__isInternalSearch);
+    const searchMode = input.searchMode ?? "semantic";
+
+    try {
+        const results = await executeScopedVectorSearch(input);
+        if (!isInternal) {
+            const durationSec = (Date.now() - startedAt) / 1000;
+            recordRagRetrievalDuration(searchMode, durationSec);
+            recordRagRetrievalOutcome(searchMode, results.length > 0 ? "has_results" : "no_results");
+        }
+        return results;
+    } catch (error) {
+        if (!isInternal) {
+            const durationSec = (Date.now() - startedAt) / 1000;
+            recordRagRetrievalDuration(searchMode, durationSec);
+            recordRagRetrievalOutcome(searchMode, "error");
+        }
+        throw error;
+    }
+}
+
+async function executeScopedVectorSearch(
+    input: ScopedVectorSearchInput,
+): Promise<ScopedSearchResult[]> {
     const query = (input.query || "").trim();
     if (!query) {
         return [];
@@ -221,6 +249,7 @@ export async function scopedVectorSearch(
                 limit: candidateLimit,
                 topK: candidateLimit,
                 minScore,
+                __isInternalSearch: true,
             }),
             searchLexical({
                 query,
@@ -283,6 +312,7 @@ export async function scopedVectorSearch(
                 legacySourceIds: uncoveredSourceIds,
                 limit: candidateLimit,
                 topK: candidateLimit,
+                __isInternalSearch: true,
             });
             const merged: ScopedSearchResult[] = [
                 ...v1.results,
@@ -313,6 +343,7 @@ export async function scopedVectorSearch(
                 __skipRagV1: true,
                 limit,
                 topK: limit,
+                __isInternalSearch: true,
             })).map((result) => ({
                 ...result,
                 metadata: { ...result.metadata, legacy_fallback_reason: legacyDecision.reason } as Record<string, unknown>,

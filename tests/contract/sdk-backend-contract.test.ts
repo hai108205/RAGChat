@@ -39,8 +39,9 @@ describe("SDK-Backend OpenAPI Integration Contract", () => {
         expect(openapi.paths).toBeDefined();
     });
 
-    describe("7 Defined Integration Endpoints", () => {
+    describe("8 Defined Integration Endpoints", () => {
         const expectedEndpoints = [
+            { path: "/capabilities", method: "get", expectedStatus: 200 },
             { path: "/messages/async", method: "post", expectedStatus: 202 },
             { path: "/stats", method: "get", expectedStatus: 200 },
             { path: "/sources", method: "get", expectedStatus: 200 },
@@ -50,7 +51,7 @@ describe("SDK-Backend OpenAPI Integration Contract", () => {
             { path: "/utilities/completion", method: "post", expectedStatus: 200 },
         ];
 
-        it("defines all 7 endpoints with correct HTTP methods and primary response status", () => {
+        it("defines all 8 endpoints with correct HTTP methods and primary response status", () => {
             for (const ep of expectedEndpoints) {
                 const pathObj = openapi.paths[ep.path];
                 expect(pathObj, `Missing path definition for ${ep.path}`).toBeDefined();
@@ -136,7 +137,7 @@ describe("SDK-Backend OpenAPI Integration Contract", () => {
         });
     });
 
-    describe("Zod Validation Schemas for 7 Integration Operations", () => {
+    describe("Zod Validation Schemas for Integration Operations", () => {
         it("validates rocketchatAsyncMessageSchema", () => {
             const valid = {
                 rocketUserId: "user-1",
@@ -144,6 +145,11 @@ describe("SDK-Backend OpenAPI Integration Contract", () => {
                 requestId: "req-1",
                 query: "What is RAG?",
                 history: [{ role: "user", content: "Hi" }],
+                roomSettings: {
+                    searchMode: "hybrid",
+                    topK: 5,
+                    similarityThreshold: 0.4,
+                },
             };
             const result = rocketchatAsyncMessageSchema.body.safeParse(valid);
             expect(result.success).toBe(true);

@@ -41,6 +41,11 @@ import { deleteSourceWithCleanup } from "../services/qdrantCleanupOutbox.service
 import { enqueueRocketChatJob } from "../utils/rocketchatQueue.js";
 import { submitRocketChatFeedback } from "../services/rocketchatFeedback.service.js";
 import { config } from "../config/runtime.js";
+import {
+    createRoomRagCapabilities,
+    parseRoomRagSettings,
+    type RoomRagSettings,
+} from "../rag/roomRagSettings.js";
 
 
 // In-memory LRU idempotency cache for fast deduplication
@@ -387,6 +392,13 @@ async function retrieveRelevantSources(
 /**
  * POST /api/v1/integrations/rocketchat/messages/async
  */
+export const getCapabilities = asyncHandler(async (req: Request, res: Response) => {
+    const capabilities = createRoomRagCapabilities({
+        lexicalRetrievalEnabled: config.rag.lexicalRetrievalEnabled,
+    });
+    return res.status(200).json(new ApiResponse(200, capabilities, "RAG capabilities retrieved successfully"));
+});
+
 export const handleAsyncMessage = asyncHandler(async (req: Request, res: Response) => {
     const canonicalRequestId = (req.id || req.body?.requestId || req.headers["x-request-id"] || crypto.randomUUID()) as string;
     const {
@@ -402,12 +414,25 @@ export const handleAsyncMessage = asyncHandler(async (req: Request, res: Respons
         embeddingModel,
         provider = "DEFAULT",
         callbackUrl,
+        roomSettings: rawRoomSettings,
     } = req.body;
 
     if (callbackUrl) {
         const validation = validateCallbackUrl(callbackUrl);
         if (!validation.valid) {
             throw new ApiError(400, `Invalid callbackUrl: ${validation.reason}`);
+        }
+    }
+
+    let roomSettings: RoomRagSettings | undefined;
+    if (rawRoomSettings !== undefined && rawRoomSettings !== null) {
+        const capabilities = createRoomRagCapabilities({
+            lexicalRetrievalEnabled: config.rag.lexicalRetrievalEnabled,
+        });
+        try {
+            roomSettings = parseRoomRagSettings(rawRoomSettings, capabilities);
+        } catch (err: any) {
+            throw new ApiError(400, `Invalid roomSettings: ${err.message}`);
         }
     }
 
@@ -425,6 +450,7 @@ export const handleAsyncMessage = asyncHandler(async (req: Request, res: Respons
         provider,
         callbackUrl,
         requestId: canonicalRequestId,
+        roomSettings,
     });
 
     if (isDuplicate) {

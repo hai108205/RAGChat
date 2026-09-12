@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import defaultPrisma from "../utils/prismaClient.js";
 import { qdrant as defaultQdrant } from "../utils/ragClients.js";
 import { upsertLexicalChunks, type LexicalChunkInput } from "../rag/lexicalChunks.js";
+import { recordRagLexicalCoverage } from "../rag/telemetry.js";
 
 export interface LexicalBackfillCheckpoint {
     completed: Record<string, {
@@ -138,6 +139,9 @@ export async function runLexicalBackfill(
     }
 
     await writeFile(options.checkpointPath, JSON.stringify(checkpoint, null, 2), "utf8");
+
+    const coverageRatio = sources.length > 0 ? (completed + skipped) / sources.length : 1;
+    recordRagLexicalCoverage(coverageRatio);
 
     return {
         checkpoint,

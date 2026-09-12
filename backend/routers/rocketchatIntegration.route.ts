@@ -12,6 +12,7 @@ import {
 } from "../utils/validationSchemas.js";
 import {
     handleAsyncMessage,
+    getCapabilities,
     getStats,
     listSources,
     deleteSource,
@@ -24,6 +25,8 @@ const rocketchatRouter = Router();
 
 // Apply integration token verification middleware across all Rocket.Chat endpoints
 rocketchatRouter.use(verifyIntegrationToken);
+
+rocketchatRouter.route("/capabilities").get(getCapabilities);
 
 rocketchatRouter
     .route("/messages/async")

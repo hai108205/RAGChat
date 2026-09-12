@@ -7,6 +7,31 @@ servers:
   - url: /api/v1/integrations/rocketchat
     description: Relative integration path
 paths:
+  /capabilities:
+    get:
+      summary: Retrieve authenticated backend RAG capabilities
+      operationId: getRocketchatCapabilities
+      tags:
+        - Integration
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/XRequestIdHeader"
+      responses:
+        "200":
+          description: Backend RAG capabilities retrieved successfully
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapabilitiesResponse"
+        "401":
+          $ref: "#/components/responses/401Unauthorized"
+        "500":
+          $ref: "#/components/responses/500InternalError"
+
   /messages/async:
     post:
       summary: Enqueue asynchronous question answering message
@@ -486,6 +511,11 @@ components:
           type: string
           nullable: true
           example: "http://rocketchat:3000/api/apps/public/8a800b09-3cc1-4bc1-8dbf-12592fc223eb/callback"
+        roomSettings:
+          type: object
+          nullable: true
+          description: Optional room-level RAG overrides validated by the backend
+          additionalProperties: true
 
     AsyncMessageResponseData:
       type: object
@@ -525,6 +555,53 @@ components:
         message:
           type: string
           example: "Message queued for processing"
+
+    CapabilitiesData:
+      type: object
+      required:
+        - lexicalRetrievalEnabled
+        - availableSearchModes
+        - defaultSearchMode
+      properties:
+        lexicalRetrievalEnabled:
+          type: boolean
+          example: true
+        availableSearchModes:
+          type: array
+          items:
+            type: string
+            enum:
+              - semantic
+              - keyword
+              - hybrid
+          example: ["semantic", "keyword", "hybrid"]
+        defaultSearchMode:
+          type: string
+          enum:
+            - semantic
+            - keyword
+            - hybrid
+          example: "semantic"
+
+    CapabilitiesResponse:
+      type: object
+      required:
+        - statusCode
+        - success
+        - data
+        - message
+      properties:
+        statusCode:
+          type: integer
+          example: 200
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: "#/components/schemas/CapabilitiesData"
+        message:
+          type: string
+          example: "RAG capabilities retrieved successfully"
 
     StatsDocument:
       type: object

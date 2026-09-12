@@ -33,3 +33,32 @@ To support scoped keyword and hybrid retrieval (`RAG_LEXICAL_RETRIEVAL_ENABLED="
 - **Quality Regression**: If Recall@10 / MRR@10 drops below baseline or citation validity fails, revert to semantic search.
 - **Database Load / Latency**: If PostgreSQL FTS latency p95 breaches SLA (> 250ms), revert search mode to `semantic`.
 
+## Room RAG Settings & Request Authentication
+
+Rocket.Chat rooms can customize RAG behavior (search mode, top-K, similarity threshold, and custom system instructions) with strict end-to-end isolation:
+
+1. **Capabilities endpoint (`GET /api/v1/integrations/rocketchat/capabilities`)**:
+   - Authenticated via Bearer token.
+   - Returns active backend capabilities (`lexicalRetrievalEnabled`, `availableSearchModes`, `defaultSearchMode`).
+   - The Rocket.Chat App dynamically hides search modes (keyword/hybrid) if lexical retrieval is disabled in the backend.
+
+2. **Per-room persistence & overrides**:
+   - Stored in Rocket.Chat Apps-Engine compound association storage (`ROOM` + `MISC`).
+   - Guarded by role permissions: only `admin`, `moderator`, `owner`, or `leader` may open the configuration modal and update settings.
+   - Enforces strict bounds: `topK` in `[3, 5, 8, 10, 15]`, `similarityThreshold` in `[0.1, 0.9]`, prompt capped at 1,500 characters and 512 tokens.
+   - Server-level grounding instructions are immutable and are always placed before room instructions in generation prompts. Room instructions can never override grounding or evidence constraints.
+
+3. **Request validation & canonical override binding**:
+   - Overrides passed in `AsyncMessageRequest.roomSettings` are validated against backend capabilities and normalized into an immutable `RoomRagSettings` object.
+   - The verified canonical settings are bound before enqueuing to BullMQ so workers only consume validated overrides.
+
+## Redacted Telemetry & Metrics
+
+All RAG trace logging and metrics collection follow strict zero-prompt-logging discipline:
+- **Redaction**: Raw user prompts, queries, document content, chunk text, and LLM responses are stripped before reaching debug/info log streams. Only bounded operational metadata (`requestId`, `roomId`, `workspaceId`, `queryLength`, `resultCount`, `model`, `latencyMs`, `stageLatencies`) is logged.
+- **Retrieval Duration (`rag_retrieval_duration_seconds`)**: Prometheus histogram tracking retrieval latency partitioned by search mode (`semantic`, `keyword`, `hybrid`).
+- **Retrieval Outcomes (`rag_retrieval_outcomes_total`)**: Prometheus counter tracking retrieval results partitioned by `mode` and `result_status` (`has_results`, `no_results`, `error`).
+- **Lexical Coverage Gauge (`rag_lexical_coverage_ratio`)**: Prometheus gauge tracking the ratio of active knowledge sources with complete lexical chunk indexing.
+- **Quality Corpus Benchmark Depth**: Human-labelled quality corpus evaluation evaluates Recall@K and MRR@K at a fixed benchmark depth (default 10) decoupled from individual room `displayTopK` settings.
+
+

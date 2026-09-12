@@ -35,8 +35,10 @@ export function evaluateRagQualityGates(input: {
     observed?: { retrievalErrorRate: number; p95RetrievalLatencyMs: number };
     maxMrrRegression?: number;
     scopeLeaks?: number;
+    benchmarkDepth?: number;
 }): QualityGateReport {
-    const metrics = evaluateRetrievalQuality(input.cases);
+    const k = input.benchmarkDepth ?? 10;
+    const metrics = evaluateRetrievalQuality(input.cases, k);
     const citationProvenance = input.citations.length
         ? input.citations.filter((citation) => citation.sourceId && citation.documentId && citation.chunkId).length / input.citations.length
         : 1;

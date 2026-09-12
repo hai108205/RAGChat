@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Retrieve authenticated backend RAG capabilities */
+        get: operations["getRocketchatCapabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/messages/async": {
         parameters: {
             query?: never;
@@ -180,6 +197,10 @@ export interface components {
             provider?: string;
             /** @example http://rocketchat:3000/api/apps/public/8a800b09-3cc1-4bc1-8dbf-12592fc223eb/callback */
             callbackUrl?: string | null;
+            /** @description Optional room-level RAG overrides validated by the backend */
+            roomSettings?: {
+                [key: string]: unknown;
+            } | null;
         };
         AsyncMessageResponseData: {
             /** @example accepted */
@@ -198,6 +219,32 @@ export interface components {
             success: boolean;
             data: components["schemas"]["AsyncMessageResponseData"];
             /** @example Message queued for processing */
+            message: string;
+        };
+        CapabilitiesData: {
+            /** @example true */
+            lexicalRetrievalEnabled: boolean;
+            /**
+             * @example [
+             *       "semantic",
+             *       "keyword",
+             *       "hybrid"
+             *     ]
+             */
+            availableSearchModes: ("semantic" | "keyword" | "hybrid")[];
+            /**
+             * @example semantic
+             * @enum {string}
+             */
+            defaultSearchMode: "semantic" | "keyword" | "hybrid";
+        };
+        CapabilitiesResponse: {
+            /** @example 200 */
+            statusCode: number;
+            /** @example true */
+            success: boolean;
+            data: components["schemas"]["CapabilitiesData"];
+            /** @example RAG capabilities retrieved successfully */
             message: string;
         };
         StatsDocument: {
@@ -646,6 +693,32 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getRocketchatCapabilities: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Request correlation identifier */
+                "X-Request-Id"?: components["parameters"]["XRequestIdHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Backend RAG capabilities retrieved successfully */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilitiesResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalError"];
+        };
+    };
     postRocketchatAsyncMessage: {
         parameters: {
             query?: never;

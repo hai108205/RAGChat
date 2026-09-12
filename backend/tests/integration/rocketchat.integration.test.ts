@@ -566,6 +566,131 @@ describe("Rocket.Chat Integration Router", () => {
         });
     });
 
+    describe("Room RAG Settings and Capabilities Endpoint", () => {
+        it("returns authenticated capabilities at GET /capabilities", async () => {
+            const app = buildTestApp();
+            const res = await request(app)
+                .get("/api/v1/integrations/rocketchat/capabilities")
+                .set("Authorization", "Bearer test-secret-token");
+
+            expect(res.status).toBe(200);
+            expect(res.body.data.promptMaxCharacters).toBe(1500);
+            expect(res.body.data.promptTokenBudget).toBe(512);
+            expect(Array.isArray(res.body.data.availableSearchModes)).toBe(true);
+        });
+
+        it("validates and binds canonical roomSettings on POST /messages/async before enqueuing", async () => {
+            const app = buildTestApp();
+            const res = await request(app)
+                .post("/api/v1/integrations/rocketchat/messages/async")
+                .set("Authorization", "Bearer test-secret-token")
+                .send({
+                    workspaceId: "default",
+                    rocketUserId: "u123",
+                    roomId: "GENERAL",
+                    requestId: "req-with-settings-1",
+                    query: "Testing room settings binding",
+                    roomSettings: {
+                        searchMode: "semantic",
+                        topK: 8,
+                        similarityThreshold: 0.8,
+                        model: "claude-3-5-sonnet-20241022",
+                        systemPrompt: "Instructions for this room",
+                    },
+                });
+
+            expect(res.status).toBe(202);
+            expect(bullmqQueueAddMock).toHaveBeenCalledWith(
+                "rocketchatIntegration",
+                "chat",
+                expect.objectContaining({
+                    payload: expect.objectContaining({
+                        roomId: "GENERAL",
+                        roomSettings: expect.objectContaining({
+                            searchMode: "semantic",
+                            topK: 8,
+                            similarityThreshold: 0.8,
+                            model: "claude-3-5-sonnet-20241022",
+                            systemPrompt: "Instructions for this room",
+                        }),
+                    }),
+                }),
+                expect.any(Object),
+            );
+        });
+
+        it("rejects unavailable search mode in roomSettings when lexical is disabled", async () => {
+            const app = buildTestApp();
+            const res = await request(app)
+                .post("/api/v1/integrations/rocketchat/messages/async")
+                .set("Authorization", "Bearer test-secret-token")
+                .send({
+                    workspaceId: "default",
+                    rocketUserId: "u123",
+                    roomId: "GENERAL",
+                    requestId: "req-invalid-mode",
+                    query: "Testing invalid mode rejection",
+                    roomSettings: {
+                        searchMode: "hybrid",
+                        topK: 5,
+                        similarityThreshold: 0.6,
+                    },
+                });
+
+            expect(res.status).toBe(400);
+            expect(res.body.message).toMatch(/not available/i);
+        });
+
+        it("rejects tampered or invalid roomSettings fields", async () => {
+            const app = buildTestApp();
+            const res = await request(app)
+                .post("/api/v1/integrations/rocketchat/messages/async")
+                .set("Authorization", "Bearer test-secret-token")
+                .send({
+                    workspaceId: "default",
+                    rocketUserId: "u123",
+                    roomId: "GENERAL",
+                    requestId: "req-tampered",
+                    query: "Testing tampered fields",
+                    roomSettings: {
+                        searchMode: "semantic",
+                        topK: 9999,
+                        similarityThreshold: 0.6,
+                        unknownField: "malicious",
+                    },
+                });
+
+            expect(res.status).toBe(400);
+        });
+
+        it("falls back cleanly when roomSettings is omitted", async () => {
+            const app = buildTestApp();
+            const res = await request(app)
+                .post("/api/v1/integrations/rocketchat/messages/async")
+                .set("Authorization", "Bearer test-secret-token")
+                .send({
+                    workspaceId: "default",
+                    rocketUserId: "u123",
+                    roomId: "GENERAL",
+                    requestId: "req-no-settings",
+                    query: "Testing absent settings",
+                });
+
+            expect(res.status).toBe(202);
+            expect(bullmqQueueAddMock).toHaveBeenCalledWith(
+                "rocketchatIntegration",
+                "chat",
+                expect.objectContaining({
+                    payload: expect.objectContaining({
+                        roomId: "GENERAL",
+                        roomSettings: undefined,
+                    }),
+                }),
+                expect.any(Object),
+            );
+        });
+    });
+
     describe("Request Correlation (X-Request-Id)", () => {
         it("preserves X-Request-Id header on main app responses", async () => {
             chatSourceFindManyMock.mockResolvedValue([]);

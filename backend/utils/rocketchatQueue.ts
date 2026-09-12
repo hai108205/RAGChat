@@ -2,6 +2,7 @@ import { Queue, type Job } from "bullmq";
 import redis from "./redis.js";
 import prisma from "./prismaClient.js";
 import logger from "./logger.js";
+import type { RoomRagSettings } from "../rag/roomRagSettings.js";
 
 export type RocketChatJobType = "chat" | "ingestion";
 export type RocketChatJobStatus = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
@@ -20,6 +21,7 @@ export interface RocketChatChatJobPayload {
     provider?: string;
     callbackUrl?: string | null;
     requestId: string;
+    roomSettings?: RoomRagSettings;
 }
 
 export interface RocketChatIngestionJobPayload {
