@@ -349,41 +349,59 @@ export interface ScrapedWebpage {
     internalLinks: string[];
 }
 
-async function scrapeWebpage(url = "", rootUrl = ""): Promise<ScrapedWebpage> {
-    const data = await fetchCrawlText(url);
-    const $ = cheerio.load(data);
+function extractWebpageContent(html = "", url = "", rootUrl = ""): ScrapedWebpage {
+    const $ = cheerio.load(html);
 
-    const rootHostname = new URL(rootUrl).hostname;
-
-    const internalLinks = extractHrefsFromScripts($, rootUrl, rootHostname);
-
-    const title = $("title").text().split(/\s+/).slice(0, 4).join(" ");
-    $("script, style, noscript").remove();
-    const bodyElem = cleanText($("article, body").text());
-
-    $("a").each((_, el) => {
-        const href = $(el).attr("href");
-        if (!href) return;
-
-        try {
-            const resolved = new URL(href, url);
-
-            if (resolved.hostname === rootHostname && resolved.protocol.startsWith("http")) {
-                const normalized = normalizeUrl(resolved.toString());
-                if (isValidDocUrl(normalized, rootUrl)) {
-                    internalLinks.add(normalized);
-                }
-            }
-        } catch {
-            // Ignore invalid URLs or mailto/tel/javascript schemes
+    let rootHostname = "";
+    try {
+        if (rootUrl) {
+            rootHostname = new URL(rootUrl).hostname;
         }
-    });
+    } catch {
+        rootHostname = "";
+    }
+
+    const internalLinks = rootUrl && rootHostname ? extractHrefsFromScripts($, rootUrl, rootHostname) : new Set<string>();
+
+    const rawTitle = $("title").text();
+    const title = cleanText(rawTitle);
+
+    $("script, style, noscript, header, footer, nav, aside").remove();
+
+    const article = $("article");
+    const rawText = article.length > 0 ? article.text() : $("body").text();
+    const bodyElem = cleanText(rawText);
+
+    if (url && rootUrl && rootHostname) {
+        $("a").each((_, el) => {
+            const href = $(el).attr("href");
+            if (!href) return;
+
+            try {
+                const resolved = new URL(href, url);
+
+                if (resolved.hostname === rootHostname && resolved.protocol.startsWith("http")) {
+                    const normalized = normalizeUrl(resolved.toString());
+                    if (isValidDocUrl(normalized, rootUrl)) {
+                        internalLinks.add(normalized);
+                    }
+                }
+            } catch {
+                // Ignore invalid URLs or mailto/tel/javascript schemes
+            }
+        });
+    }
 
     return {
         body: bodyElem,
         title,
         internalLinks: Array.from(internalLinks),
     };
+}
+
+async function scrapeWebpage(url = "", rootUrl = ""): Promise<ScrapedWebpage> {
+    const data = await fetchCrawlText(url);
+    return extractWebpageContent(data, url, rootUrl);
 }
 
 function cleanText(text: string): string {
@@ -695,6 +713,7 @@ export {
     normalizeUrl,
     isValidDocUrl,
     scrapeWebpage,
+    extractWebpageContent,
     scrapeTitle,
     generateVectorEmbeddings,
     getEmbeddingDimensionsForModel,

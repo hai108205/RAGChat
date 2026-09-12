@@ -49,4 +49,19 @@ describe("type-aware chunking", () => {
             expect.objectContaining({ metadata: expect.objectContaining({ sheet: "Revenue", locator: "sheet:Revenue" }) }),
         ]));
     });
+
+    it("honors the 640-word budget directly without inflating to characters", async () => {
+        const words = Array.from({ length: 1000 }, (_, i) => `word${i}`).join(" ");
+        const chunks = await splitIntoSegments({
+            text: words,
+            documentType: "plain",
+            options: { chunkSize: 640, chunkOverlap: 80 },
+        });
+
+        expect(chunks.length).toBeGreaterThan(1);
+        for (const chunk of chunks) {
+            const wordCount = chunk.content.trim().split(/\s+/).length;
+            expect(wordCount).toBeLessThanOrEqual(640);
+        }
+    });
 });

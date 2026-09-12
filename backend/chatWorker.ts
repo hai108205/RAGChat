@@ -187,9 +187,12 @@ const processVectorJob = async (job: Job<JobData>, ingestionRunId?: string): Pro
             const { body, title } = await scrapeWebpage(url, normalizedDocsUrl);
             if (!body) return;
 
+            // Legacy splitter is character based (1 token ≈ 4 characters)
+            const legacyCharacterChunkSize = 1000;
+            const legacyCharacterChunkOverlap = 150;
             const chunks = splitDocumentationContent(body, {
-                chunkSize: useRagV1 ? config.rag.chunkSizeTokens * 4 : 1000,
-                chunkOverlap: useRagV1 ? config.rag.chunkOverlapTokens * 4 : 150,
+                chunkSize: legacyCharacterChunkSize,
+                chunkOverlap: legacyCharacterChunkOverlap,
             });
 
             if (chunks.length === 0) return;
@@ -200,15 +203,24 @@ const processVectorJob = async (job: Job<JobData>, ingestionRunId?: string): Pro
                     documentType: "html",
                     locator: url,
                     metadata: { title, sourceUrl: url },
-                    options: { chunkSize: config.rag.chunkSizeTokens * 4, chunkOverlap: config.rag.chunkOverlapTokens * 4 },
+                    options: { chunkSize: config.rag.chunkSizeTokens, chunkOverlap: config.rag.chunkOverlapTokens },
                 })
                 : [];
             if (useRagV1 && ragSegments.length === 0) return;
 
-            const embeddings = (await generateVectorEmbeddings(
-                chunks.map((c) => c.content),
-                { model: embeddingModel, dimensions: embeddingDimensions },
-            )) as number[][];
+            const v1Embeddings = (useRagV1 && ragSegments.length > 0)
+                ? (await generateVectorEmbeddings(
+                    ragSegments.map((s) => s.content),
+                    { model: embeddingModel, dimensions: embeddingDimensions },
+                )) as number[][]
+                : [];
+
+            const legacyEmbeddings = (!useRagV1 || config.rag.dualWriteEnabled)
+                ? (await generateVectorEmbeddings(
+                    chunks.map((c) => c.content),
+                    { model: embeddingModel, dimensions: embeddingDimensions },
+                )) as number[][]
+                : [];
 
             if (useRagV1) {
                 await indexRagDocumentV1({
@@ -226,7 +238,7 @@ const processVectorJob = async (job: Job<JobData>, ingestionRunId?: string): Pro
                         locator: chunk.metadata.locator,
                         metadata: chunk.metadata,
                     })),
-                    embeddings,
+                    embeddings: v1Embeddings,
                 }, { prisma, qdrant });
             }
 
@@ -235,7 +247,7 @@ const processVectorJob = async (job: Job<JobData>, ingestionRunId?: string): Pro
                     wait: true,
                     points: chunks.map((chunk, index) => ({
                         id: crypto.randomUUID(),
-                        vector: embeddings[index],
+                        vector: legacyEmbeddings[index],
                         payload: {
                             url,
                             title,

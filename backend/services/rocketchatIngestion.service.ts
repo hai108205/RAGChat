@@ -92,13 +92,14 @@ export async function ingestBase64Document(
         );
     }
 
-    // 4. Split into chunks
+    // 4. Split into chunks for legacy indexing
+    // The legacy splitter is character based (1 token ≈ 4 characters).
     const useRagV1 = config.rag.v1Enabled;
+    const legacyCharacterChunkSize = 1000;
+    const legacyCharacterChunkOverlap = 150;
     const chunks = splitDocumentationContent(parsed.text, {
-        // The legacy splitter is character based; use a conservative token→character
-        // approximation for the v1 rollout until structural splitters are enabled.
-        chunkSize: useRagV1 ? config.rag.chunkSizeTokens * 4 : 1000,
-        chunkOverlap: useRagV1 ? config.rag.chunkOverlapTokens * 4 : 150,
+        chunkSize: legacyCharacterChunkSize,
+        chunkOverlap: legacyCharacterChunkOverlap,
     });
 
     if (chunks.length === 0) {
@@ -139,8 +140,8 @@ export async function ingestBase64Document(
                 ? parsed.segments
                 : [{ content: parsed.text, metadata: { locator: normalizedFilename } }],
         }, {
-            chunkSize: config.rag.chunkSizeTokens * 4,
-            chunkOverlap: config.rag.chunkOverlapTokens * 4,
+            chunkSize: config.rag.chunkSizeTokens,
+            chunkOverlap: config.rag.chunkOverlapTokens,
         })
         : [];
     if (useRagV1 && ragSegments.length === 0) {
