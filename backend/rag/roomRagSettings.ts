@@ -1,9 +1,10 @@
+import { SUPPORTED_CHAT_MODELS, type SupportedChatModel } from "./supportedChatModels.js";
+
 export const ROOM_RAG_SEARCH_MODES = ["semantic", "keyword", "hybrid"] as const;
 export const ROOM_RAG_TOP_K_VALUES = [3, 5, 8, 10, 15] as const;
 export const ROOM_RAG_THRESHOLDS = [0.3, 0.5, 0.6, 0.8] as const;
 export const ROOM_RAG_PROMPT_MAX_CHARACTERS = 1500;
 export const ROOM_RAG_PROMPT_TOKEN_BUDGET = 512;
-const ROOM_RAG_MODEL_MAX_CHARACTERS = 200;
 
 export type RoomRagSearchMode = (typeof ROOM_RAG_SEARCH_MODES)[number];
 export type RoomRagTopK = (typeof ROOM_RAG_TOP_K_VALUES)[number];
@@ -25,7 +26,7 @@ export interface RoomRagSettings {
     readonly searchMode: RoomRagSearchMode;
     readonly topK: RoomRagTopK;
     readonly similarityThreshold: RoomRagThreshold;
-    readonly model?: string;
+    readonly model?: SupportedChatModel;
     readonly systemPrompt?: string;
     /** Reserved from generation context when room instructions are included. */
     readonly promptTokenBudget: typeof ROOM_RAG_PROMPT_TOKEN_BUDGET;
@@ -91,12 +92,13 @@ export function parseRoomRagSettings(input: unknown, capabilities: RoomRagCapabi
     if (!isAllowed(settings.similarityThreshold, ROOM_RAG_THRESHOLDS)) {
         throw new Error("Room RAG similarityThreshold is invalid");
     }
-    if (Object.hasOwn(settings, "model") && (
-        typeof settings.model !== "string"
-        || !settings.model.trim()
-        || settings.model.length > ROOM_RAG_MODEL_MAX_CHARACTERS
-    )) {
-        throw new Error("Room RAG model must be a non-empty bounded string");
+    let model: SupportedChatModel | undefined;
+    if (Object.hasOwn(settings, "model")) {
+        const candidate = typeof settings.model === "string" ? settings.model.trim() : undefined;
+        if (!candidate || !isAllowed(candidate, SUPPORTED_CHAT_MODELS)) {
+            throw new Error("Room RAG model is an unsupported model");
+        }
+        model = candidate;
     }
     if (Object.hasOwn(settings, "systemPrompt") && typeof settings.systemPrompt !== "string") {
         throw new Error("Room RAG systemPrompt must be a string");
@@ -116,7 +118,7 @@ export function parseRoomRagSettings(input: unknown, capabilities: RoomRagCapabi
         searchMode: settings.searchMode,
         topK: settings.topK,
         similarityThreshold: settings.similarityThreshold,
-        ...(typeof settings.model === "string" ? { model: settings.model.trim() } : {}),
+        ...(model ? { model } : {}),
         ...(typeof settings.systemPrompt === "string" ? { systemPrompt: truncatePromptToTokenBudget(settings.systemPrompt) } : {}),
         promptTokenBudget: ROOM_RAG_PROMPT_TOKEN_BUDGET,
     });

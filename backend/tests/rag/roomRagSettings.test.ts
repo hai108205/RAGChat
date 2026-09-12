@@ -5,6 +5,7 @@ import {
     estimateRoomRagPromptTokens,
     parseRoomRagSettings,
 } from "../../rag/roomRagSettings.js";
+import { SUPPORTED_CHAT_MODELS } from "../../rag/supportedChatModels.js";
 
 const lexicalCapabilities = createRoomRagCapabilities({ lexicalRetrievalEnabled: true });
 const semanticOnlyCapabilities = createRoomRagCapabilities({ lexicalRetrievalEnabled: false });
@@ -75,6 +76,20 @@ describe("room RAG settings", () => {
             model: "gpt-4o-mini",
             systemPrompt: "Respond in Vietnamese.",
         });
+    });
+
+    it("accepts only the canonical model identifiers offered by the modal", () => {
+        expect(SUPPORTED_CHAT_MODELS).toEqual([
+            "gpt-4o",
+            "gpt-4o-mini",
+            "claude-3-5-sonnet-20241022",
+            "gemini-1.5-pro",
+            "llama-3.1-70b",
+        ]);
+        expect(parseRoomRagSettings(validSettings({ model: "gpt-4o-mini" }), lexicalCapabilities).model)
+            .toBe("gpt-4o-mini");
+        expect(() => parseRoomRagSettings(validSettings({ model: "openai/gpt-4o-mini" }), lexicalCapabilities))
+            .toThrow(/unsupported model/i);
     });
 
     it("accepts a canonical payload without optional model or system prompt", () => {

@@ -3,6 +3,15 @@ import {
     ButtonStyle,
 } from '@rocket.chat/apps-engine/definition/uikit';
 import { IUIKitModalViewParam } from '@rocket.chat/apps-engine/definition/uikit/UIKitInteractionResponder';
+import { SUPPORTED_CHAT_MODELS, type SupportedChatModel } from '../../../backend/rag/supportedChatModels';
+
+const chatModelLabels: Record<SupportedChatModel, string> = {
+    'gpt-4o': 'GPT-4o (Mạnh nhất, hỗ trợ đa phương tiện)',
+    'gpt-4o-mini': 'GPT-4o-mini (Nhanh, tiết kiệm chi phí)',
+    'claude-3-5-sonnet-20241022': 'Claude 3.5 Sonnet (Thông minh, lý luận cao)',
+    'gemini-1.5-pro': 'Gemini 1.5 Pro (Ngữ cảnh cực lớn)',
+    'llama-3.1-70b': 'Llama 3.1 70B (Mã nguồn mở)',
+};
 
 /**
  * Interface representing customizable RAG configuration options.
@@ -68,13 +77,10 @@ export function buildRagSettingsModal(
             actionId: RagSettingsActionId.MODEL_SELECT,
             placeholder: builder.newPlainTextObject('Chọn mô hình AI...'),
             initialValue: selectedModel,
-            options: [
-                { text: builder.newPlainTextObject('GPT-4o (Mạnh nhất, hỗ trợ đa phương tiện)'), value: 'gpt-4o' },
-                { text: builder.newPlainTextObject('GPT-4o-mini (Nhanh, tiết kiệm chi phí)'), value: 'gpt-4o-mini' },
-                { text: builder.newPlainTextObject('Claude 3.5 Sonnet (Thông minh, lý luận cao)'), value: 'claude-3-5-sonnet-20241022' },
-                { text: builder.newPlainTextObject('Gemini 1.5 Pro (Ngữ cảnh cực lớn)'), value: 'gemini-1.5-pro' },
-                { text: builder.newPlainTextObject('Llama 3.1 70B (Mã nguồn mở)'), value: 'llama-3.1-70b' },
-            ],
+            options: SUPPORTED_CHAT_MODELS.map((model) => ({
+                text: builder.newPlainTextObject(chatModelLabels[model]),
+                value: model,
+            })),
         }),
     });
 
