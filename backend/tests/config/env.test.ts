@@ -80,4 +80,22 @@ describe("parseEnvironment", () => {
             retrievalCandidateLimit: 24,
         });
     });
+
+    it("defaults lexical retrieval capability to disabled", () => {
+        expect(parseEnvironment(baseEnvironment()).rag.lexicalRetrievalEnabled).toBe(false);
+    });
+
+    it("accepts an explicit lexical retrieval capability flag", () => {
+        const environment = baseEnvironment();
+        environment.RAG_LEXICAL_RETRIEVAL_ENABLED = "true";
+
+        expect(parseEnvironment(environment).rag.lexicalRetrievalEnabled).toBe(true);
+    });
+
+    it("rejects a malformed lexical retrieval capability flag", () => {
+        const environment = baseEnvironment();
+        environment.RAG_LEXICAL_RETRIEVAL_ENABLED = "enabled";
+
+        expect(() => parseEnvironment(environment)).toThrow(/RAG_LEXICAL_RETRIEVAL_ENABLED/i);
+    });
 });

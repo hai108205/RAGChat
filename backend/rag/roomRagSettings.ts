@@ -3,6 +3,7 @@ export const ROOM_RAG_TOP_K_VALUES = [3, 5, 8, 10, 15] as const;
 export const ROOM_RAG_THRESHOLDS = [0.3, 0.5, 0.6, 0.8] as const;
 export const ROOM_RAG_PROMPT_MAX_CHARACTERS = 1500;
 export const ROOM_RAG_PROMPT_TOKEN_BUDGET = 512;
+const ROOM_RAG_MODEL_MAX_CHARACTERS = 200;
 
 export type RoomRagSearchMode = (typeof ROOM_RAG_SEARCH_MODES)[number];
 export type RoomRagTopK = (typeof ROOM_RAG_TOP_K_VALUES)[number];
@@ -23,8 +24,9 @@ export interface RoomRagCapabilities {
 export interface RoomRagSettings {
     readonly searchMode: RoomRagSearchMode;
     readonly topK: RoomRagTopK;
-    readonly threshold: RoomRagThreshold;
-    readonly prompt: string;
+    readonly similarityThreshold: RoomRagThreshold;
+    readonly model?: string;
+    readonly systemPrompt?: string;
     /** Reserved from generation context when room instructions are included. */
     readonly promptTokenBudget: typeof ROOM_RAG_PROMPT_TOKEN_BUDGET;
 }
@@ -46,8 +48,23 @@ export function createRoomRagCapabilities({
 
 const isAllowed = <T>(value: unknown, choices: readonly T[]): value is T => choices.includes(value as T);
 
+/**
+ * Treat each UTF-8 byte as a token. This deliberately overestimates normal
+ * tokenizer usage, but guarantees that no Unicode prompt can exceed the
+ * reserved generation budget even when it has no whitespace.
+ */
+export const estimateRoomRagPromptTokens = (prompt: string): number => Buffer.byteLength(prompt, "utf8");
+
 const truncatePromptToTokenBudget = (prompt: string): string =>
-    (prompt.match(/\S+/gu) || []).slice(0, ROOM_RAG_PROMPT_TOKEN_BUDGET).join(" ");
+    [...prompt].reduce(
+        ({ value, used }, character) => {
+            const characterTokens = estimateRoomRagPromptTokens(character);
+            return used + characterTokens > ROOM_RAG_PROMPT_TOKEN_BUDGET
+                ? { value, used }
+                : { value: value + character, used: used + characterTokens };
+        },
+        { value: "", used: 0 },
+    ).value;
 
 export function parseRoomRagSettings(input: unknown, capabilities: RoomRagCapabilities): RoomRagSettings {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -55,9 +72,13 @@ export function parseRoomRagSettings(input: unknown, capabilities: RoomRagCapabi
     }
 
     const settings = input as Record<string, unknown>;
-    const expectedKeys = ["searchMode", "topK", "threshold", "prompt"];
+    const requiredKeys = ["searchMode", "topK", "similarityThreshold"];
+    const allowedKeys = [...requiredKeys, "model", "systemPrompt"];
     const actualKeys = Object.keys(settings);
-    if (actualKeys.length !== expectedKeys.length || actualKeys.some((key) => !expectedKeys.includes(key))) {
+    if (
+        actualKeys.some((key) => !allowedKeys.includes(key))
+        || requiredKeys.some((key) => !Object.hasOwn(settings, key))
+    ) {
         throw new Error("Room RAG settings contain unsupported fields");
     }
 
@@ -67,14 +88,21 @@ export function parseRoomRagSettings(input: unknown, capabilities: RoomRagCapabi
     if (!isAllowed(settings.topK, ROOM_RAG_TOP_K_VALUES)) {
         throw new Error("Room RAG topK is invalid");
     }
-    if (!isAllowed(settings.threshold, ROOM_RAG_THRESHOLDS)) {
-        throw new Error("Room RAG threshold is invalid");
+    if (!isAllowed(settings.similarityThreshold, ROOM_RAG_THRESHOLDS)) {
+        throw new Error("Room RAG similarityThreshold is invalid");
     }
-    if (typeof settings.prompt !== "string") {
-        throw new Error("Room RAG prompt must be a string");
+    if (Object.hasOwn(settings, "model") && (
+        typeof settings.model !== "string"
+        || !settings.model.trim()
+        || settings.model.length > ROOM_RAG_MODEL_MAX_CHARACTERS
+    )) {
+        throw new Error("Room RAG model must be a non-empty bounded string");
     }
-    if (settings.prompt.length > ROOM_RAG_PROMPT_MAX_CHARACTERS) {
-        throw new Error(`Room RAG prompt must not exceed ${ROOM_RAG_PROMPT_MAX_CHARACTERS.toLocaleString("en-US")} characters`);
+    if (Object.hasOwn(settings, "systemPrompt") && typeof settings.systemPrompt !== "string") {
+        throw new Error("Room RAG systemPrompt must be a string");
+    }
+    if (typeof settings.systemPrompt === "string" && settings.systemPrompt.length > ROOM_RAG_PROMPT_MAX_CHARACTERS) {
+        throw new Error(`Room RAG systemPrompt must not exceed ${ROOM_RAG_PROMPT_MAX_CHARACTERS.toLocaleString("en-US")} characters`);
     }
 
     const availableModes = capabilities.lexicalRetrievalEnabled
@@ -87,8 +115,9 @@ export function parseRoomRagSettings(input: unknown, capabilities: RoomRagCapabi
     return Object.freeze({
         searchMode: settings.searchMode,
         topK: settings.topK,
-        threshold: settings.threshold,
-        prompt: truncatePromptToTokenBudget(settings.prompt),
+        similarityThreshold: settings.similarityThreshold,
+        ...(typeof settings.model === "string" ? { model: settings.model.trim() } : {}),
+        ...(typeof settings.systemPrompt === "string" ? { systemPrompt: truncatePromptToTokenBudget(settings.systemPrompt) } : {}),
         promptTokenBudget: ROOM_RAG_PROMPT_TOKEN_BUDGET,
     });
 }
