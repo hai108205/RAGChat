@@ -20,12 +20,30 @@ describe("structured query rewrite", () => {
         })).resolves.toEqual({ query: "Who owns the payments service?", rewritten: true });
     });
 
-    it("falls back to the original query when structured output fails", async () => {
+    it("falls back to the original query with TRANSPORT_ERROR when transport fails", async () => {
         await expect(rewriteQueryWithStructuredOutput({
             query: "Who is he?",
             history: [{ role: "user", content: "Tell me about Ada." }],
-            invoke: async () => { throw new Error("invalid structured output"); },
-        })).resolves.toEqual({ query: "Who is he?", rewritten: false, fallbackReason: "QUERY_REWRITE_FAILURE" });
+            invoke: async () => { throw new Error("network timeout"); },
+        })).resolves.toEqual({ query: "Who is he?", rewritten: false, fallbackReason: "TRANSPORT_ERROR" });
+    });
+
+    it("falls back to the original query with MALFORMED_OUTPUT when schema validation fails", async () => {
+        await expect(rewriteQueryWithStructuredOutput({
+            query: "Who is he?",
+            history: [{ role: "user", content: "Tell me about Ada." }],
+            invoke: async () => ({ invalid_key: "not matching schema" }),
+        })).resolves.toEqual({ query: "Who is he?", rewritten: false, fallbackReason: "MALFORMED_OUTPUT" });
+    });
+
+    it("falls back to the original query with MALFORMED_OUTPUT when StructuredOutputParsingError occurs", async () => {
+        const error = new Error("Failed to parse JSON");
+        error.name = "StructuredOutputParsingError";
+        await expect(rewriteQueryWithStructuredOutput({
+            query: "Who is he?",
+            history: [{ role: "user", content: "Tell me about Ada." }],
+            invoke: async () => { throw error; },
+        })).resolves.toEqual({ query: "Who is he?", rewritten: false, fallbackReason: "MALFORMED_OUTPUT" });
     });
 
     it("triggers rewrite for Vietnamese ambiguous follow-ups", async () => {
