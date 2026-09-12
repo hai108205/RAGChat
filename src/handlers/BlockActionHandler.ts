@@ -11,6 +11,7 @@ import {
 } from '@rocket.chat/apps-engine/definition/uikit';
 import { BackendClient } from '../lib/BackendClient';
 import { loadMessageActionPayload } from '../persistence/messagePayloadStore';
+import { RagSettingsStore } from '../persistence/ragSettingsStore';
 import { sendMessage, sendNotification, sendPlaceholderMessage, sendMessageWithBlocks } from '../utils/MessageHelper';
 import { buildConfirmDeleteModal } from '../uikit/modals/ConfirmDeleteModal';
 import { buildSourceDetailModal } from '../uikit/modals/SourceDetailModal';
@@ -222,6 +223,8 @@ export class BlockActionHandler {
                 );
 
                 const callbackUrl = await buildCallbackUrl(read);
+                const ragSettingsStore = new RagSettingsStore(read, _persistence);
+                const roomSettings = await ragSettingsStore.getRoomSettings(room.id);
 
                 try {
                     const response = await client.askAsync(
@@ -234,6 +237,7 @@ export class BlockActionHandler {
                         requestId,
                         workspaceId,
                         callbackUrl,
+                        roomSettings ? { roomSettings } : undefined,
                     );
 
                     this.logger.accepted('regenerate', {
@@ -581,6 +585,8 @@ export class BlockActionHandler {
                 );
 
                 const callbackUrl = await buildCallbackUrl(read);
+                const ragSettingsStore = new RagSettingsStore(read, _persistence);
+                const roomSettings = await ragSettingsStore.getRoomSettings(room.id);
 
                 try {
                     const response = await client.askAsync(
@@ -593,6 +599,7 @@ export class BlockActionHandler {
                         requestId,
                         workspaceId,
                         callbackUrl,
+                        roomSettings ? { roomSettings } : undefined,
                     );
 
                     this.logger.accepted('suggestion_chip', {

@@ -13,7 +13,8 @@ import { BackendClient } from '../lib/BackendClient';
 import { sendMessage, sendMessageWithBlocks } from '../utils/MessageHelper';
 import { COMMANDS } from '../constants/Commands';
 import { ERRORS } from '../constants/Errors';
-import { buildDocumentListBlocks } from '../uikit';
+import { buildDocumentListBlocks, buildRagSettingsModal } from '../uikit';
+import { RagSettingsStore } from '../persistence/ragSettingsStore';
 import { Logger } from '../utils/Logger';
 import { createRequestId } from '../utils/RequestId';
 
@@ -247,11 +248,51 @@ export class RagCommand implements ISlashCommand {
             return;
         }
 
+        if (subCommand === 'settings' || subCommand === 'config') {
+            const triggerId = context.getTriggerId();
+            if (!triggerId) {
+                await sendMessage(read, modify, room, '❌ Không tìm thấy triggerId để mở giao diện cài đặt.', undefined, threadId);
+                return;
+            }
+
+            try {
+                const client = new BackendClient(http, read, this.logger);
+                const capabilities = await client.getRoomRagCapabilities(requestId);
+                const store = new RagSettingsStore(read, _persis);
+                const currentSettings = await store.getRoomSettings(room.id);
+
+                const modal = buildRagSettingsModal({
+                    appId: 'ragchat',
+                    currentSettings: currentSettings || undefined,
+                    capabilities,
+                });
+
+                await modify.getUiController().openModalView(modal, { triggerId }, sender);
+
+                this.logger.completed('settings_modal', {
+                    event: 'settings_modal.opened',
+                    requestId,
+                    roomId: room.id,
+                    userId: sender.id,
+                });
+            } catch (err: any) {
+                this.logger.failed('settings_modal', err, {
+                    event: 'settings_modal.failed',
+                    requestId,
+                    roomId: room.id,
+                    userId: sender.id,
+                });
+                await sendMessage(read, modify, room, `❌ Lỗi khi mở giao diện cài đặt: ${err.message || 'Lỗi hệ thống'}`, undefined, threadId);
+            }
+            return;
+        }
+
         // Default: help
         const helpMessage = [
             '📖 *Hướng dẫn các lệnh RAG (/rag)*',
             '• `/rag docs` — Quản lý và xem danh sách tài liệu tri thức RAG của phòng.',
             '• `/rag prune` — Quét và dọn dẹp các tài liệu rác, lỗi index hoặc 0 chunks.',
+            '• `/rag settings` (hoặc `/rag config`) — Tuỳ chỉnh các tham số RAG & AI cho phòng này.',
             '• `/rag help` — Hiển thị hướng dẫn sử dụng.',
         ].join('\n');
 

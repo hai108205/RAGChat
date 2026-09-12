@@ -4,6 +4,7 @@ import {
 } from '@rocket.chat/apps-engine/definition/uikit';
 import { IUIKitModalViewParam } from '@rocket.chat/apps-engine/definition/uikit/UIKitInteractionResponder';
 import { SUPPORTED_CHAT_MODELS, type SupportedChatModel } from '../../../backend/rag/supportedChatModels';
+import type { RoomRagCapabilitiesData } from '../../lib/BackendTypes';
 
 const chatModelLabels: Record<SupportedChatModel, string> = {
     'gpt-4o': 'GPT-4o (Mạnh nhất, hỗ trợ đa phương tiện)',
@@ -30,6 +31,7 @@ export interface IRagSettings {
 export interface IRagSettingsModalParams {
     appId: string;
     currentSettings?: IRagSettings;
+    capabilities?: RoomRagCapabilitiesData;
     viewId?: string;
     title?: string;
 }
@@ -54,6 +56,7 @@ export function buildRagSettingsModal(
     const {
         appId,
         currentSettings = {},
+        capabilities,
         viewId = 'rag-settings-modal',
         title = '⚙️ Cấu Hình RAG & AI',
     } = params;
@@ -85,18 +88,37 @@ export function buildRagSettingsModal(
     });
 
     // 3. Search Mode Selection
-    const selectedMode = currentSettings.searchMode || 'hybrid';
+    const allSearchModeOptions: Record<'hybrid' | 'semantic' | 'keyword', string> = {
+        hybrid: '🔀 Hybrid (Kết hợp Vector Ngữ nghĩa + Từ khoá BM25)',
+        semantic: '🧠 Semantic Vector (Chỉ tìm theo ý nghĩa ngữ cảnh)',
+        keyword: '🔍 Keyword / Fulltext (Chỉ tìm theo từ khoá chính xác)',
+    };
+
+    const allowedModes: Array<'hybrid' | 'semantic' | 'keyword'> = capabilities
+        ? (capabilities.lexicalRetrievalEnabled
+            ? (capabilities.availableSearchModes as Array<'hybrid' | 'semantic' | 'keyword'>)
+            : ['semantic'])
+        : ['hybrid', 'semantic', 'keyword'];
+
+    const filteredModeOptions = (['hybrid', 'semantic', 'keyword'] as const)
+        .filter((mode) => allowedModes.includes(mode))
+        .map((mode) => ({
+            text: builder.newPlainTextObject(allSearchModeOptions[mode]),
+            value: mode,
+        }));
+
+    let selectedMode = currentSettings.searchMode;
+    if (!selectedMode || !allowedModes.includes(selectedMode)) {
+        selectedMode = allowedModes.includes('hybrid') ? 'hybrid' : 'semantic';
+    }
+
     builder.addInputBlock({
         label: builder.newPlainTextObject('Phương thức tìm kiếm (Search Mode):'),
         element: builder.newStaticSelectElement({
             actionId: RagSettingsActionId.SEARCH_MODE_SELECT,
             placeholder: builder.newPlainTextObject('Chọn chế độ tìm kiếm...'),
             initialValue: selectedMode,
-            options: [
-                { text: builder.newPlainTextObject('🔀 Hybrid (Kết hợp Vector Ngữ nghĩa + Từ khoá BM25)'), value: 'hybrid' },
-                { text: builder.newPlainTextObject('🧠 Semantic Vector (Chỉ tìm theo ý nghĩa ngữ cảnh)'), value: 'semantic' },
-                { text: builder.newPlainTextObject('🔍 Keyword / Fulltext (Chỉ tìm theo từ khoá chính xác)'), value: 'keyword' },
-            ],
+            options: filteredModeOptions,
         }),
     });
 

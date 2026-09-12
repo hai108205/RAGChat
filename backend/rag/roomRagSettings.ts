@@ -76,9 +76,10 @@ export function parseRoomRagSettings(input: unknown, capabilities: RoomRagCapabi
     const requiredKeys = ["searchMode", "topK", "similarityThreshold"];
     const allowedKeys = [...requiredKeys, "model", "systemPrompt"];
     const actualKeys = Object.keys(settings);
+    const hasProperty = (obj: object, prop: string) => Object.prototype.hasOwnProperty.call(obj, prop);
     if (
         actualKeys.some((key) => !allowedKeys.includes(key))
-        || requiredKeys.some((key) => !Object.hasOwn(settings, key))
+        || requiredKeys.some((key) => !hasProperty(settings, key))
     ) {
         throw new Error("Room RAG settings contain unsupported fields");
     }
@@ -93,14 +94,14 @@ export function parseRoomRagSettings(input: unknown, capabilities: RoomRagCapabi
         throw new Error("Room RAG similarityThreshold is invalid");
     }
     let model: SupportedChatModel | undefined;
-    if (Object.hasOwn(settings, "model")) {
+    if (hasProperty(settings, "model")) {
         const candidate = typeof settings.model === "string" ? settings.model.trim() : undefined;
         if (!candidate || !isAllowed(candidate, SUPPORTED_CHAT_MODELS)) {
             throw new Error("Room RAG model is an unsupported model");
         }
         model = candidate;
     }
-    if (Object.hasOwn(settings, "systemPrompt") && typeof settings.systemPrompt !== "string") {
+    if (hasProperty(settings, "systemPrompt") && typeof settings.systemPrompt !== "string") {
         throw new Error("Room RAG systemPrompt must be a string");
     }
     if (typeof settings.systemPrompt === "string" && settings.systemPrompt.length > ROOM_RAG_PROMPT_MAX_CHARACTERS) {

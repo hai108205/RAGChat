@@ -12,6 +12,7 @@ import {
 import { BackendClient } from '../lib/BackendClient';
 import { sendMessage, sendNotification, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
 import { buildCallbackUrl } from '../utils/CallbackUrl';
+import { RagSettingsStore } from '../persistence/ragSettingsStore';
 import { Logger } from '../utils/Logger';
 import { createRequestId } from '../utils/RequestId';
 
@@ -194,6 +195,8 @@ export class ActionButtonHandler {
                     );
 
                     const callbackUrl = await buildCallbackUrl(read);
+                    const ragSettingsStore = new RagSettingsStore(read, _persistence);
+                    const roomSettings = await ragSettingsStore.getRoomSettings(room.id);
 
                     try {
                         const response = await client.askAsync(
@@ -206,6 +209,7 @@ export class ActionButtonHandler {
                             requestId,
                             workspaceId,
                             callbackUrl,
+                            roomSettings ? { roomSettings } : undefined,
                         );
 
                         this.logger.accepted('action_ask', {

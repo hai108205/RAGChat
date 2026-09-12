@@ -9,6 +9,7 @@ import { IMessage } from '@rocket.chat/apps-engine/definition/messages';
 import { IPostMessageSentToBot } from '@rocket.chat/apps-engine/definition/messages/IPostMessageSentToBot';
 import { BackendClient } from '../lib/BackendClient';
 import { SessionStore } from '../persistence/sessionStore';
+import { RagSettingsStore } from '../persistence/ragSettingsStore';
 import { Formatter } from '../utils/Formatter';
 import { sendMessage, sendMessageWithBlocks, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
 import { readMaxHistory } from '../utils/SettingReader';
@@ -240,6 +241,8 @@ export class BotMessageHandler implements IPostMessageSentToBot {
 
             const history = await sessionStore.getHistory(message.sender.id, message.room.id, message.threadId, maxHistory);
             const callbackUrl = await buildCallbackUrl(read);
+            const ragSettingsStore = new RagSettingsStore(read, persistence);
+            const roomSettings = await ragSettingsStore.getRoomSettings(message.room.id);
 
             // 2. Enqueue async job to backend — results return via CallbackEndpoint
             const response = await client.askAsync(
@@ -252,6 +255,7 @@ export class BotMessageHandler implements IPostMessageSentToBot {
                 requestId,
                 workspaceId,
                 callbackUrl,
+                roomSettings ? { roomSettings } : undefined,
             );
 
             this.logger.accepted('ask', {

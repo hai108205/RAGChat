@@ -11,6 +11,7 @@ import {
 } from '@rocket.chat/apps-engine/definition/slashcommands';
 import { BackendClient } from '../lib/BackendClient';
 import { SessionStore } from '../persistence/sessionStore';
+import { RagSettingsStore } from '../persistence/ragSettingsStore';
 import { Formatter } from '../utils/Formatter';
 import { sendMessage, sendPlaceholderMessage, updateMessage } from '../utils/MessageHelper';
 import { readMaxHistory } from '../utils/SettingReader';
@@ -111,6 +112,8 @@ export class AskCommand implements ISlashCommand {
 
             const history = await sessionStore.getHistory(sender.id, room.id, threadId, maxHistory);
             const callbackUrl = await buildCallbackUrl(read);
+            const ragSettingsStore = new RagSettingsStore(read, persis);
+            const roomSettings = await ragSettingsStore.getRoomSettings(room.id);
 
             // Enqueue async job to Node backend.
             const response = await client.askAsync(
@@ -123,6 +126,7 @@ export class AskCommand implements ISlashCommand {
                 requestId,
                 workspaceId,
                 callbackUrl,
+                roomSettings ? { roomSettings } : undefined,
             );
 
             this.logger.accepted('ask', {

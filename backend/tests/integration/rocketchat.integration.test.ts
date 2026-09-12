@@ -238,6 +238,12 @@ vi.mock("../../utils/prismaClient.js", () => ({
             findUnique: vi.fn().mockResolvedValue(null),
             update: vi.fn().mockResolvedValue({}),
         },
+        ragLexicalChunk: {
+            upsert: vi.fn().mockResolvedValue({}),
+            createMany: vi.fn().mockResolvedValue({ count: 1 }),
+            findMany: vi.fn().mockResolvedValue([]),
+            deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
         $transaction: vi.fn().mockImplementation(async (cb: any) => {
             if (typeof cb === "function") {
                 return cb({

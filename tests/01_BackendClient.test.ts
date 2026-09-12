@@ -116,6 +116,65 @@ describe("Unit Test Suite: BackendClient Runtime Settings Injection", () => {
         expect(reqData.callbackUrl).toBe("http://callback.url");
     });
 
+    it("propagates roomSettings in askAsync payload", async () => {
+        mockHttp.registerMockResponse({
+            url: "/api/v1/integrations/rocketchat/messages/async",
+            method: "POST",
+            statusCode: 202,
+            data: { status: "accepted", jobId: "job-room-settings", requestId: "req-room-settings" },
+        });
+
+        await client.askAsync(
+            "Question with room settings",
+            "u1",
+            "room-101",
+            undefined,
+            undefined,
+            [],
+            "req-room-settings",
+            undefined,
+            undefined,
+            {
+                roomSettings: {
+                    searchMode: "hybrid",
+                    topK: 10,
+                    similarityThreshold: 0.8,
+                    model: "claude-3-5-sonnet-20241022",
+                    systemPrompt: "Delimited room instructions",
+                },
+            },
+        );
+
+        const requests = mockHttp.getRecordedRequests();
+        const reqData = requests[0].options?.data;
+        expect(reqData.roomSettings).toBeDefined();
+        expect(reqData.roomSettings.searchMode).toBe("hybrid");
+        expect(reqData.roomSettings.topK).toBe(10);
+        expect(reqData.roomSettings.similarityThreshold).toBe(0.8);
+        expect(reqData.roomSettings.model).toBe("claude-3-5-sonnet-20241022");
+        expect(reqData.roomSettings.systemPrompt).toBe("Delimited room instructions");
+    });
+
+    it("fetches room RAG capabilities via getRoomRagCapabilities", async () => {
+        mockHttp.registerMockResponse({
+            url: "/api/v1/integrations/rocketchat/capabilities",
+            method: "GET",
+            statusCode: 200,
+            data: {
+                lexicalRetrievalEnabled: true,
+                availableSearchModes: ["semantic", "keyword", "hybrid"],
+                promptMaxCharacters: 1500,
+                promptTokenBudget: 512,
+            },
+        });
+
+        const capabilities = await client.getRoomRagCapabilities("req-cap-1");
+        expect(capabilities.lexicalRetrievalEnabled).toBe(true);
+        expect(capabilities.availableSearchModes).toContain("hybrid");
+        expect(capabilities.promptMaxCharacters).toBe(1500);
+        expect(capabilities.promptTokenBudget).toBe(512);
+    });
+
     it("injects embeddingModel and workspaceId into uploadBase64 payload", async () => {
         mockRead.setSetting("workspace-id", "upload-ws");
         mockRead.setSetting("embedding-model", "openai/text-embedding-3-large");

@@ -23,6 +23,8 @@ import {
     DeleteSourceResponseData,
     FeedbackPayload,
     IntegrationStatsData,
+    RoomRagCapabilitiesData,
+    RoomRagSettingsPayload,
     SearchOptions,
     SearchResult,
     SourceDocument,
@@ -71,6 +73,8 @@ export {
     FeedbackPayload,
     BackendClientError,
     BackendResponseEnvelope,
+    RoomRagCapabilitiesData,
+    RoomRagSettingsPayload,
 } from './BackendTypes';
 
 /**
@@ -141,6 +145,7 @@ export class BackendClient {
             embeddingModel: finalEmbeddingModel,
             provider: options?.provider || 'DEFAULT',
             callbackUrl,
+            roomSettings: options?.roomSettings,
         };
 
         try {
@@ -160,6 +165,39 @@ export class BackendClient {
             }
             const message = error instanceof Error ? error.message : ERRORS.BACKEND_UNAVAILABLE;
             throw new Error(message);
+        }
+    }
+
+    /**
+     * Retrieves backend RAG capabilities via `/api/v1/integrations/rocketchat/capabilities`.
+     */
+    public async getRoomRagCapabilities(
+        requestId?: string,
+    ): Promise<RoomRagCapabilitiesData> {
+        const reqId = requestId || createRequestId('capabilities');
+        try {
+            const response = await this.get('/api/v1/integrations/rocketchat/capabilities', HTTP_TIMEOUT.DEFAULT, reqId);
+            const data = this.extractData<RoomRagCapabilitiesData>(response);
+            if (!data) {
+                return {
+                    lexicalRetrievalEnabled: false,
+                    availableSearchModes: ['semantic'],
+                    promptMaxCharacters: 1500,
+                    promptTokenBudget: 512,
+                };
+            }
+            return data;
+        } catch (error: unknown) {
+            this.logger.warn('Failed to fetch RAG capabilities from backend, falling back to safe semantic-only defaults', {
+                requestId: reqId,
+                error: error instanceof Error ? error.message : String(error),
+            });
+            return {
+                lexicalRetrievalEnabled: false,
+                availableSearchModes: ['semantic'],
+                promptMaxCharacters: 1500,
+                promptTokenBudget: 512,
+            };
         }
     }
 

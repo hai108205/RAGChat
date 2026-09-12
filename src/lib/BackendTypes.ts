@@ -76,6 +76,22 @@ export interface BackendAskOptions {
     embeddingModel?: string;
     workspaceId?: string;
     provider?: string;
+    roomSettings?: RoomRagSettingsPayload;
+}
+
+export interface RoomRagSettingsPayload {
+    searchMode?: 'semantic' | 'keyword' | 'hybrid';
+    topK?: number;
+    similarityThreshold?: number;
+    model?: string;
+    systemPrompt?: string;
+}
+
+export interface RoomRagCapabilitiesData {
+    lexicalRetrievalEnabled: boolean;
+    availableSearchModes: Array<'semantic' | 'keyword' | 'hybrid'>;
+    promptMaxCharacters: number;
+    promptTokenBudget: number;
 }
 
 export interface AsyncMessagePayload {
@@ -92,6 +108,7 @@ export interface AsyncMessagePayload {
     embeddingModel?: string;
     provider?: string;
     callbackUrl?: string;
+    roomSettings?: RoomRagSettingsPayload;
 }
 
 export interface AsyncMessageResponseData {
