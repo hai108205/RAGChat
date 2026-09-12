@@ -95,6 +95,24 @@ describe("retrieval quality utilities", () => {
         ]);
     });
 
+    it("respects maximumCandidates option when explicitly provided", () => {
+        const candidates = [
+            { id: "c1", score: 0.95 },
+            { id: "c2", score: 0.94 },
+            { id: "c3", score: 0.93 },
+            { id: "c4", score: 0.92 },
+            { id: "c5", score: 0.91 },
+        ];
+
+        expect(selectGroundedCandidates(candidates, { maximumCandidates: 5 }).map((c) => c.id)).toEqual([
+            "c1",
+            "c2",
+            "c3",
+            "c4",
+            "c5",
+        ]);
+    });
+
     it("normalizes NFC and NFD query and chunk text before scoring terms", () => {
         const terms = extractNormalizedQueryTerms("CA\u0300 phe\u0302");
 

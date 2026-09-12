@@ -264,23 +264,25 @@ export async function ingestBase64Document(
                 })),
             });
 
-            await upsertLexicalChunks(
-                chunks.map((chunk, index) => ({
-                    chatSourceId: source.id,
-                    chunkId: `${source.id}_chunk_${index}`,
-                    chunkIndex: index,
-                    content: chunk.content,
-                    contentHash: crypto.createHash("sha256").update(chunk.content).digest("hex"),
-                    locator: `chunk:${index}`,
-                    heading: chunk.heading || normalizedFilename,
-                    pageUrl: sourceUrl,
-                    metadata: {
-                        chunkType: chunk.chunkType,
-                        hasCodeBlock: chunk.hasCodeBlock,
-                    },
-                })),
-                { prisma },
-            );
+            if (!useRagV1) {
+                await upsertLexicalChunks(
+                    chunks.map((chunk, index) => ({
+                        chatSourceId: source.id,
+                        chunkId: `${source.id}_chunk_${index}`,
+                        chunkIndex: index,
+                        content: chunk.content,
+                        contentHash: crypto.createHash("sha256").update(chunk.content).digest("hex"),
+                        locator: `chunk:${index}`,
+                        heading: chunk.heading || normalizedFilename,
+                        pageUrl: sourceUrl,
+                        metadata: {
+                            chunkType: chunk.chunkType,
+                            hasCodeBlock: chunk.hasCodeBlock,
+                        },
+                    })),
+                    { prisma },
+                );
+            }
         }
 
         // 10. Persist DocumentPage metadata

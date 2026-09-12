@@ -10,10 +10,10 @@ export const QueryRewriteSchema = z.object({
 type HistoryMessage = { role?: string; content?: string };
 type StructuredInvoker = (prompt: string) => Promise<unknown>;
 
-function requiresRewrite(query: string, history: readonly HistoryMessage[]): boolean {
-    return Boolean(history.length)
-        && query.trim().split(/\s+/).length <= 12
-        && /\b(it|they|them|he|she|that|those|this|there|above|previous)\b/i.test(query);
+export const AMBIGUOUS_SIGNALS_REGEX = /(?:\b|^)(it|they|them|he|she|that|those|this|these|there|above|previous|earlier|former|latter|nó|chúng|chúng\s+nó|họ|đó|này|kia|đấy|ở\s+trên|trước\s+đó|cái\s+đó|cái\s+này|điều\s+đó|điều\s+này|việc\s+đó|việc\s+này|thế\s+nào|sao|ra\s+sao)(?:\b|$)/iu;
+
+export function requiresRewrite(query: string, history: readonly HistoryMessage[]): boolean {
+    return Boolean(history.length) && AMBIGUOUS_SIGNALS_REGEX.test(query.trim());
 }
 
 function createStructuredInvoker(): StructuredInvoker | null {

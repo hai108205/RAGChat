@@ -9,6 +9,7 @@ type ScoredCandidate = {
 
 type GroundedCandidateOptions = {
     minimumScore?: unknown;
+    maximumCandidates?: number;
 };
 
 type SourceWithVectorMetadata = {
@@ -52,6 +53,9 @@ export function selectGroundedCandidates<T extends ScoredCandidate>(
     options: GroundedCandidateOptions = {},
 ): T[] {
     const minimumScore = clampedCosineScore(options.minimumScore) ?? MINIMUM_COSINE_SCORE;
+    const maxCandidates = typeof options.maximumCandidates === "number" && options.maximumCandidates > 0
+        ? options.maximumCandidates
+        : MAXIMUM_CANDIDATES;
     const validCandidates = candidates
         .map((candidate, index) => ({ candidate, index, score: clampedCosineScore(candidate.score) }))
         .filter((entry): entry is { candidate: T; index: number; score: number } => entry.score !== null)
@@ -63,7 +67,7 @@ export function selectGroundedCandidates<T extends ScoredCandidate>(
 
     return validCandidates
         .filter((entry) => bestScore - entry.score <= MAXIMUM_SCORE_GAP + SCORE_COMPARISON_TOLERANCE)
-        .slice(0, MAXIMUM_CANDIDATES)
+        .slice(0, maxCandidates)
         .map((entry) => entry.candidate);
 }
 

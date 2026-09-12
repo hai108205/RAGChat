@@ -113,4 +113,39 @@ describe("processRocketChatChat", () => {
             expect.objectContaining({ answer: result.answer, sources: [] }),
         );
     });
+
+    it("propagates roomSettings to retrieval and LLM, placing delimited instructions below immutable grounding rules", async () => {
+        await processRocketChatChat({
+            workspaceId: "workspace-1",
+            rocketUserId: "rocket-user-1",
+            roomId: "room-1",
+            query: "How does Aurora deploy?",
+            requestId: "request-room-settings",
+            roomSettings: {
+                searchMode: "hybrid",
+                topK: 8,
+                similarityThreshold: 0.6,
+                model: "gpt-4o",
+                systemPrompt: "Always answer with a friendly tone and use bullet points.",
+                promptTokenBudget: 512,
+            },
+        });
+
+        expect(scopedVectorSearchMock).toHaveBeenCalledWith(expect.objectContaining({
+            searchMode: "hybrid",
+            topK: 8,
+            minScore: 0.6,
+            similarityThreshold: 0.6,
+        }));
+
+        const createCall = completionCreateMock.mock.calls[0][0];
+        expect(createCall.model).toBe("gpt-4o");
+
+        const systemPrompt = createCall.messages[0].content;
+        // Immutable server grounding rules must be first
+        expect(systemPrompt.indexOf("You are RAGChat")).toBeLessThan(systemPrompt.indexOf("ROOM INSTRUCTIONS:"));
+        expect(systemPrompt.indexOf("evidence only")).toBeLessThan(systemPrompt.indexOf("ROOM INSTRUCTIONS:"));
+        // Room instructions must be clearly delimited below server grounding rules
+        expect(systemPrompt).toContain("ROOM INSTRUCTIONS:\n<<<\nAlways answer with a friendly tone and use bullet points.\n>>>");
+    });
 });

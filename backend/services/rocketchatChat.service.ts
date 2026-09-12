@@ -14,6 +14,7 @@ import { buildRagContext } from "../rag/context.js";
 import { rewriteQueryWithStructuredOutput } from "../rag/queryRewrite.js";
 import { startRagTrace } from "../rag/telemetry.js";
 import { trimHistoryForGeneration } from "../rag/history.js";
+import { type RoomRagSettings, ROOM_RAG_PROMPT_TOKEN_BUDGET } from "../rag/roomRagSettings.js";
 
 export interface RocketChatChatPayload {
     workspaceId?: string;
@@ -29,6 +30,7 @@ export interface RocketChatChatPayload {
     provider?: string;
     callbackUrl?: string | null;
     requestId: string;
+    roomSettings?: RoomRagSettings;
 }
 
 const INSUFFICIENT_DOCUMENTATION_EVIDENCE =
@@ -95,10 +97,14 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
         embeddingModel,
         callbackUrl,
         requestId,
+        roomSettings,
     } = payload;
 
-    const defaultModel = model || config.llm.defaultModel;
+    const defaultModel = roomSettings?.model || model || config.llm.defaultModel;
     const temp = typeof temperature === "number" ? temperature : 0.7;
+    const topK = roomSettings?.topK ?? 3;
+    const similarityThreshold = roomSettings?.similarityThreshold ?? 0.3;
+    const searchMode = roomSettings?.searchMode ?? "semantic";
     const trace = startRagTrace({ requestId, roomId, workspaceId, queryLength: query.length });
 
     try {
@@ -133,15 +139,25 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
             roomId,
             threadId,
             embeddingModel,
-            topK: 3,
-            minScore: 0.3,
+            searchMode,
+            topK,
+            minScore: similarityThreshold,
+            similarityThreshold,
         }));
 
-        const ragContext = buildRagContext(searchResults, config.rag?.contextTokenBudget ?? 5600);
+        const promptReservationTokens = roomSettings?.systemPrompt
+            ? (roomSettings.promptTokenBudget ?? ROOM_RAG_PROMPT_TOKEN_BUDGET)
+            : 0;
+        const ragContext = buildRagContext(
+            searchResults,
+            config.rag?.contextTokenBudget ?? 5600,
+            { promptReservationTokens },
+        );
         const groundedSources = ragContext.sources;
         const citations = formatRocketChatCitations(groundedSources);
 
-        // 2. Build system prompt
+        // 2. Build system prompt: server grounding rules are immutable and come FIRST.
+        // Delimited room instructions are placed below and cannot override grounding rules.
         let systemPrompt =
             "You are RAGChat, an intelligent AI assistant integrated with Rocket.Chat.\n";
         if (groundedSources.length > 0) {
@@ -151,6 +167,10 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
         } else {
             systemPrompt +=
                 "No documentation excerpts were retrieved. State that there is insufficient evidence in the provided documentation to answer the user's question. Do not answer from general knowledge. Use Markdown formatting.";
+        }
+
+        if (roomSettings?.systemPrompt?.trim()) {
+            systemPrompt += `\n\nROOM INSTRUCTIONS:\n<<<\n${roomSettings.systemPrompt.trim()}\n>>>`;
         }
 
         const messages: any[] = [{ role: "system", content: systemPrompt }];

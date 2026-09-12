@@ -3,12 +3,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const {
     chatSourceFindManyMock,
     documentPageFindManyMock,
+    prismaQueryRawMock,
     qdrantQueryMock,
     qdrantSearchMock,
     generateVectorEmbeddingsMock,
 } = vi.hoisted(() => ({
     chatSourceFindManyMock: vi.fn(),
     documentPageFindManyMock: vi.fn(),
+    prismaQueryRawMock: vi.fn(),
     qdrantQueryMock: vi.fn(),
     qdrantSearchMock: vi.fn(),
     generateVectorEmbeddingsMock: vi.fn(),
@@ -22,6 +24,7 @@ vi.mock("../utils/prismaClient.js", () => ({
         documentPage: {
             findMany: (...args: any[]) => documentPageFindManyMock(...args),
         },
+        $queryRaw: (...args: any[]) => prismaQueryRawMock(...args),
     },
 }));
 
@@ -51,6 +54,7 @@ describe("scopedVectorSearch Service", () => {
     beforeEach(() => {
         chatSourceFindManyMock.mockReset();
         documentPageFindManyMock.mockReset();
+        prismaQueryRawMock.mockReset();
         qdrantQueryMock.mockReset();
         qdrantSearchMock.mockReset();
         generateVectorEmbeddingsMock.mockReset().mockResolvedValue([new Array(1536).fill(0.05)]);
@@ -80,37 +84,47 @@ describe("scopedVectorSearch Service", () => {
     });
 
     describe("Deduplication and ranking", () => {
-        it("sorts results by relevance descending and deduplicates by title + snippet prefix", () => {
+        it("sorts results by relevance descending and deduplicates by chunkId or content hash without false 25-char truncation", () => {
             const results = [
                 {
                     title: "Doc B",
                     snippet: "Content of B",
                     pageUrl: "https://example.com/b",
                     relevance: 0.7,
-                    metadata: {},
+                    metadata: { chunkId: "chunk-b" },
                 },
                 {
                     title: "Doc A",
                     snippet: "Content of A that is long",
                     pageUrl: "https://example.com/a1",
                     relevance: 0.95,
-                    metadata: {},
+                    metadata: { chunkId: "chunk-a-1" },
                 },
                 {
                     title: "Doc A",
                     snippet: "Content of A that is long and slightly more text",
                     pageUrl: "https://example.com/a2",
                     relevance: 0.85,
-                    metadata: {},
+                    metadata: { chunkId: "chunk-a-2" },
+                },
+                {
+                    title: "Doc A Duplicate",
+                    snippet: "Content of A that is long",
+                    pageUrl: "https://example.com/a1-dup",
+                    relevance: 0.80,
+                    metadata: { chunkId: "chunk-a-1" },
                 },
             ];
 
             const ranked = deduplicateAndRankResults(results, 5);
-            expect(ranked).toHaveLength(2);
-            expect(ranked[0].title).toBe("Doc A");
+            // chunk-a-1 duplicate is removed, but distinct chunks chunk-a-1, chunk-a-2, and chunk-b are preserved
+            expect(ranked).toHaveLength(3);
+            expect(ranked[0].metadata.chunkId).toBe("chunk-a-1");
             expect(ranked[0].relevance).toBe(0.95);
-            expect(ranked[1].title).toBe("Doc B");
-            expect(ranked[1].relevance).toBe(0.7);
+            expect(ranked[1].metadata.chunkId).toBe("chunk-a-2");
+            expect(ranked[1].relevance).toBe(0.85);
+            expect(ranked[2].metadata.chunkId).toBe("chunk-b");
+            expect(ranked[2].relevance).toBe(0.7);
         });
 
         it("slices results to limit", () => {
@@ -221,7 +235,7 @@ describe("scopedVectorSearch Service", () => {
                 query: "grounded query",
                 workspaceId: "default",
                 roomId: "GENERAL",
-                topK: 10,
+                topK: 3,
                 minScore: 0,
             });
 
@@ -479,6 +493,133 @@ describe("scopedVectorSearch Service", () => {
             });
 
             expect(results).toEqual([]);
+        });
+    });
+
+    describe("Search mode dispatch & candidate depth", () => {
+        it("executes lexical search directly when searchMode is 'keyword'", async () => {
+            prismaQueryRawMock.mockResolvedValue([
+                {
+                    chunkId: "lex-1",
+                    chatSourceId: "src-1",
+                    content: "Deployment instructions with keyword",
+                    locator: "chunk:0",
+                    heading: "Deployment",
+                    pageUrl: "https://docs/deploy",
+                    documentId: "doc-1",
+                    documentStatus: "ACTIVE",
+                    rankScore: 0.45,
+                },
+            ]);
+
+            const results = await scopedVectorSearch({
+                query: "deployment instructions",
+                workspaceId: "ws-1",
+                roomId: "GENERAL",
+                searchMode: "keyword",
+                topK: 5,
+                minScore: 0.8, // Cosine threshold should NOT filter out lexical ranks
+            });
+
+            expect(results).toHaveLength(1);
+            expect(results[0].title).toBe("Deployment");
+            expect(results[0].metadata.retrievalMode).toBe("lexical");
+            // Dense embeddings should not be called for keyword search
+            expect(generateVectorEmbeddingsMock).not.toHaveBeenCalled();
+            expect(qdrantQueryMock).not.toHaveBeenCalled();
+        });
+
+        it("over-fetches candidates and fuses dense and lexical results via RRF when searchMode is 'hybrid'", async () => {
+            chatSourceFindManyMock.mockResolvedValue([
+                {
+                    id: "src-1",
+                    heading: "Deployment Docs",
+                    documentationUrl: "https://docs/deploy",
+                    collectionName: "col-1",
+                    embeddingModel: "openai/text-embedding-3-small",
+                    embeddingDimensions: 1536,
+                },
+            ]);
+
+            qdrantQueryMock.mockResolvedValue({
+                points: [
+                    {
+                        id: "dense-1",
+                        score: 0.85,
+                        payload: { title: "Dense Doc", body: "Dense match content", chunkId: "chunk-shared" },
+                    },
+                    {
+                        id: "dense-2",
+                        score: 0.75,
+                        payload: { title: "Dense Only", body: "Dense only content", chunkId: "chunk-dense-only" },
+                    },
+                ],
+            });
+
+            prismaQueryRawMock.mockResolvedValue([
+                {
+                    chunkId: "chunk-shared",
+                    chatSourceId: "src-1",
+                    content: "Dense match content",
+                    heading: "Shared Doc",
+                    pageUrl: "https://docs/shared",
+                    rankScore: 0.35,
+                },
+                {
+                    chunkId: "chunk-lex-only",
+                    chatSourceId: "src-1",
+                    content: "Lexical only content",
+                    heading: "Lexical Doc",
+                    pageUrl: "https://docs/lexical",
+                    rankScore: 0.25,
+                },
+            ]);
+
+            const results = await scopedVectorSearch({
+                query: "deployment match",
+                workspaceId: "ws-1",
+                roomId: "GENERAL",
+                searchMode: "hybrid",
+                topK: 5,
+                minScore: 0.5,
+            });
+
+            expect(results.length).toBeGreaterThanOrEqual(2);
+            expect(results[0].metadata.chunkId).toBe("chunk-shared");
+            expect(qdrantQueryMock).toHaveBeenCalled();
+            expect(prismaQueryRawMock).toHaveBeenCalled();
+        });
+
+        it("allows topK values up to 15 without capping at 3", async () => {
+            chatSourceFindManyMock.mockResolvedValue([
+                {
+                    id: "src-1",
+                    heading: "Big Docs",
+                    documentationUrl: "https://docs/big",
+                    collectionName: "col-1",
+                    embeddingModel: "openai/text-embedding-3-small",
+                    embeddingDimensions: 1536,
+                },
+            ]);
+
+            const points = Array.from({ length: 15 }, (_, i) => ({
+                id: `pt-${i}`,
+                score: 0.80 - i * 0.01,
+                payload: { title: `Doc ${i}`, body: `Content ${i}`, chunkId: `chunk-${i}` },
+            }));
+
+            qdrantQueryMock.mockResolvedValue({ points });
+
+            const results = await scopedVectorSearch({
+                query: "big search",
+                workspaceId: "ws-1",
+                roomId: "GENERAL",
+                searchMode: "semantic",
+                topK: 10,
+                minScore: 0.5,
+            });
+
+            expect(results).toHaveLength(10);
         });
     });
 });

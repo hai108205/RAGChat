@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import prisma from "../utils/prismaClient.js";
 import logger from "../utils/logger.js";
 import { qdrant } from "../utils/ragClients.js";
@@ -17,6 +18,7 @@ import {
 import { selectGroundedCandidates } from "../utils/retrievalQuality.js";
 import { createRagScope } from "../rag/types.js";
 import { resolveLegacyReadDecision, searchRagV1 } from "../rag/retrieval.js";
+import { searchLexical, fuseRankingsRrf } from "../rag/lexicalRetrieval.js";
 
 export interface ScopedVectorSearchInput {
     query: string;
@@ -32,6 +34,8 @@ export interface ScopedVectorSearchInput {
     threadId?: string | null;
     limit?: number;
     topK?: number;
+    searchMode?: "semantic" | "keyword" | "hybrid";
+    similarityThreshold?: number;
     embeddingModel?: string | null;
     minScore?: number;
     mode?: "room" | "global";
@@ -74,6 +78,18 @@ export function normalizeRelevanceScore(rawScore: unknown): number {
     return Math.round(clamped * 100) / 100;
 }
 
+export function getDeduplicationKey(item: ScopedSearchResult): string {
+    const chunkId = item.metadata?.chunkId;
+    if (typeof chunkId === "string" && chunkId.trim().length > 0) {
+        return `chunk:${chunkId.trim()}`;
+    }
+    const sourceId = (item.metadata?.sourceId as string) || "";
+    const normalizedContent = (item.snippet || "").trim().toLowerCase().replace(/\s+/g, " ");
+    const normalizedTitle = (item.title || "").trim().toLowerCase();
+    const hash = crypto.createHash("sha256").update(`${normalizedTitle}::${normalizedContent}`).digest("hex");
+    return `hash:${sourceId}:${hash}`;
+}
+
 /**
  * Deduplicates and sorts search results by relevance descending.
  */
@@ -88,8 +104,7 @@ export function deduplicateAndRankResults(
     const sorted = [...results].sort((a, b) => b.relevance - a.relevance);
 
     for (const item of sorted) {
-        // Build deduplication key based on normalized title and snippet prefix (first 25 chars)
-        const key = `${(item.title || "").trim().toLowerCase()}::${(item.snippet || "").trim().slice(0, 25).toLowerCase()}`;
+        const key = getDeduplicationKey(item);
         if (!seen.has(key)) {
             seen.add(key);
             unique.push(item);
@@ -114,7 +129,7 @@ function deduplicateAndRankVectorResults(
 
     const sorted = [...results].sort((a, b) => rawScore(b) - rawScore(a));
     for (const item of sorted) {
-        const key = `${(item.title || "").trim().toLowerCase()}::${(item.snippet || "").trim().slice(0, 25).toLowerCase()}`;
+        const key = getDeduplicationKey(item);
         if (!seen.has(key)) {
             seen.add(key);
             unique.push(item);
@@ -144,11 +159,14 @@ export async function scopedVectorSearch(
         return [];
     }
 
-    const limit = Math.max(1, Math.min(3, input.limit || input.topK || 3));
+    const limit = Math.max(1, Math.min(15, input.topK || input.limit || 3));
+    const candidateLimit = Math.min(30, Math.max(20, limit * 2));
     const minScore =
-        typeof input.minScore === "number" && input.minScore >= 0.3
-            ? Math.min(1, input.minScore)
-            : 0.5;
+        typeof input.similarityThreshold === "number"
+            ? input.similarityThreshold
+            : typeof input.minScore === "number" && input.minScore >= 0.3
+                ? Math.min(1, input.minScore)
+                : 0.5;
     const workspaceId = normalizeWorkspaceId(input.scope?.workspaceId ?? input.workspaceId);
     const roomId = normalizeRoomId(input.scope?.roomId ?? input.roomId);
     const threadId = normalizeThreadId(input.scope?.threadId ?? input.threadId);
@@ -157,6 +175,62 @@ export async function scopedVectorSearch(
     const throwOnQdrantError = Boolean(input.throwOnQdrantError);
     const fallbackToKeyword = input.fallbackToKeyword !== false;
     const legacySourceIds = input.legacySourceIds;
+    const searchMode = input.searchMode ?? "semantic";
+
+    // If room mode and no roomId specified, return empty to prevent scope leakage
+    if (mode === "room" && !roomId) {
+        logger.warn({ workspaceId }, "scopedVectorSearch called without roomId in room mode; returning empty");
+        return [];
+    }
+
+    // 1. Keyword search mode: dispatch directly to PostgreSQL lexical search without dense query or cosine threshold
+    if (searchMode === "keyword") {
+        const ragScope = createRagScope({
+            kind: "rocketchat",
+            workspaceId,
+            roomId: roomId!,
+            threadId,
+        });
+        const lexicalResults = await searchLexical({
+            query,
+            scope: ragScope,
+            limit,
+        }, { prisma });
+        return lexicalResults.map((r) => ({
+            title: r.title,
+            snippet: r.snippet,
+            pageUrl: r.pageUrl,
+            relevance: r.relevance,
+            metadata: { ...r.metadata },
+        }));
+    }
+
+    // 2. Hybrid search mode: over-fetch dense candidates (with cosine similarity threshold)
+    // and lexical candidates (without cosine threshold), then fuse with RRF k=60
+    if (searchMode === "hybrid") {
+        const ragScope = createRagScope({
+            kind: "rocketchat",
+            workspaceId,
+            roomId: roomId!,
+            threadId,
+        });
+        const [denseCandidates, lexicalCandidates] = await Promise.all([
+            scopedVectorSearch({
+                ...input,
+                searchMode: "semantic",
+                limit: candidateLimit,
+                topK: candidateLimit,
+                minScore,
+            }),
+            searchLexical({
+                query,
+                scope: ragScope,
+                limit: candidateLimit,
+            }, { prisma }),
+        ]);
+
+        return fuseRankingsRrf(denseCandidates, lexicalCandidates, { k: 60, topK: limit });
+    }
 
     if (config.rag.v1Enabled && !input.__skipRagV1 && mode === "room") {
         const ragScope = createRagScope({
@@ -174,7 +248,7 @@ export async function scopedVectorSearch(
                 indexVersion: config.rag.indexVersion,
                 embeddingModel: profileModel,
                 dimensions: profileDimensions,
-                limit,
+                limit: candidateLimit,
                 minScore,
             }, { prisma, embed: generateVectorEmbeddings, qdrant });
             const legacyCandidates = await prisma.chatSource.findMany({
@@ -194,7 +268,7 @@ export async function scopedVectorSearch(
                 dualReadEnabled: config.rag.dualReadEnabled,
                 allowAvailabilityFallback: config.rag.allowLegacyAvailabilityFallback,
             });
-            if (!legacyDecision.shouldReadLegacy) return v1.results;
+            if (!legacyDecision.shouldReadLegacy) return v1.results.slice(0, limit);
             logger.info({
                 ragEvent: legacyDecision.reason,
                 queryLength: query.length,
@@ -202,7 +276,14 @@ export async function scopedVectorSearch(
                 roomId,
                 uncoveredSourceCount: uncoveredSourceIds.length,
             }, "RAG v1 legacy-read policy activated");
-            const legacyResults = await scopedVectorSearch({ ...input, __skipRagV1: true, legacySourceIds: uncoveredSourceIds });
+            const legacyResults = await scopedVectorSearch({
+                ...input,
+                searchMode: "semantic",
+                __skipRagV1: true,
+                legacySourceIds: uncoveredSourceIds,
+                limit: candidateLimit,
+                topK: candidateLimit,
+            });
             const merged: ScopedSearchResult[] = [
                 ...v1.results,
                 ...legacyResults.map((result) => ({
@@ -210,13 +291,7 @@ export async function scopedVectorSearch(
                     metadata: { ...result.metadata, legacy_fallback_reason: legacyDecision.reason } as Record<string, unknown>,
                 })),
             ];
-            const seen = new Set<string>();
-            return merged.filter((item) => {
-                const key = `${item.metadata.chunkId || item.metadata.sourceId || item.pageUrl}::${item.snippet.slice(0, 80)}`;
-                if (seen.has(key)) return false;
-                seen.add(key);
-                return true;
-            }).sort((a, b) => b.relevance - a.relevance).slice(0, limit);
+            return deduplicateAndRankResults(merged, limit);
         } catch (error: any) {
             logger.error({ err: error?.message || String(error), queryLength: query.length }, "RAG v1 retrieval failed");
             const legacyDecision = resolveLegacyReadDecision({
@@ -232,7 +307,13 @@ export async function scopedVectorSearch(
                 workspaceId,
                 roomId,
             }, "RAG v1 failed; using explicitly enabled legacy availability fallback");
-            return (await scopedVectorSearch({ ...input, __skipRagV1: true })).map((result) => ({
+            return (await scopedVectorSearch({
+                ...input,
+                searchMode: "semantic",
+                __skipRagV1: true,
+                limit,
+                topK: limit,
+            })).map((result) => ({
                 ...result,
                 metadata: { ...result.metadata, legacy_fallback_reason: legacyDecision.reason } as Record<string, unknown>,
             }));
@@ -372,7 +453,7 @@ export async function scopedVectorSearch(
                 if (typeof qdrant.query === "function") {
                     const resp = await qdrant.query(collectionName, {
                         query: queryVector,
-                        limit: limit * 2,
+                        limit: candidateLimit,
                         with_payload: true,
                         score_threshold: minScore > 0 ? minScore : undefined,
                     });
@@ -380,7 +461,7 @@ export async function scopedVectorSearch(
                 } else if (typeof qdrant.search === "function") {
                     const resp = await qdrant.search(collectionName, {
                         vector: queryVector,
-                        limit: limit * 2,
+                        limit: candidateLimit,
                         with_payload: true,
                         score_threshold: minScore > 0 ? minScore : undefined,
                     });
@@ -421,6 +502,7 @@ export async function scopedVectorSearch(
                                 retrievalMode: "vector",
                                 sourceId: source.id,
                                 collectionName,
+                                chunkId: payload.chunkId || (pt.id ? String(pt.id) : undefined),
                                 chunkType: payload.chunkType,
                                 embeddingModel: group.model,
                                 rawScore: pt.score,
@@ -438,9 +520,10 @@ export async function scopedVectorSearch(
         }
 
         rawResults.push(
-            ...selectGroundedCandidates(groupCandidates, { minimumScore: minScore }).map(
-                (candidate) => candidate.result,
-            ),
+            ...selectGroundedCandidates(groupCandidates, {
+                minimumScore: minScore,
+                maximumCandidates: candidateLimit,
+            }).map((candidate) => candidate.result),
         );
     }
 

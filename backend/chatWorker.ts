@@ -260,23 +260,25 @@ const processVectorJob = async (job: Job<JobData>, ingestionRunId?: string): Pro
                     })),
                 });
 
-                await upsertLexicalChunks(
-                    chunks.map((chunk, index) => ({
-                        chatSourceId: chatSourceId!,
-                        chunkId: `${chatSourceId}_chunk_${index}_${crypto.createHash("sha256").update(url).digest("hex").slice(0, 8)}`,
-                        chunkIndex: index,
-                        content: chunk.content,
-                        contentHash: crypto.createHash("sha256").update(chunk.content).digest("hex"),
-                        locator: url,
-                        heading: chunk.heading || title || "Untitled Page",
-                        pageUrl: url,
-                        metadata: {
-                            hasCodeBlock: chunk.hasCodeBlock,
-                            chunkType: chunk.chunkType,
-                        },
-                    })),
-                    { prisma },
-                );
+                if (!useRagV1) {
+                    await upsertLexicalChunks(
+                        chunks.map((chunk, index) => ({
+                            chatSourceId: chatSourceId!,
+                            chunkId: `${chatSourceId}_chunk_${index}_${crypto.createHash("sha256").update(url).digest("hex").slice(0, 8)}`,
+                            chunkIndex: index,
+                            content: chunk.content,
+                            contentHash: crypto.createHash("sha256").update(chunk.content).digest("hex"),
+                            locator: url,
+                            heading: chunk.heading || title || "Untitled Page",
+                            pageUrl: url,
+                            metadata: {
+                                hasCodeBlock: chunk.hasCodeBlock,
+                                chunkType: chunk.chunkType,
+                            },
+                        })),
+                        { prisma },
+                    );
+                }
             }
 
             await prisma.documentPage.create({

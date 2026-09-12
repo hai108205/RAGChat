@@ -14,7 +14,15 @@ export interface RagContextResult {
 
 const estimateTokens = (text: string): number => Math.ceil(text.length / 4);
 
-export function buildRagContext(candidates: readonly RagContextCandidate[], tokenBudget: number): RagContextResult {
+export const AMBIGUOUS_SIGNALS_REGEX = /(?:\b|^)(it|they|them|he|she|that|those|this|these|there|above|previous|earlier|former|latter|nó|chúng|chúng\s+nó|họ|đó|này|kia|đấy|ở\s+trên|trước\s+đó|cái\s+đó|cái\s+này|điều\s+đó|điều\s+này|việc\s+đó|việc\s+này|thế\s+nào|sao|ra\s+sao)(?:\b|$)/iu;
+
+export function buildRagContext(
+    candidates: readonly RagContextCandidate[],
+    tokenBudget: number,
+    options?: { promptReservationTokens?: number },
+): RagContextResult {
+    const reservation = options?.promptReservationTokens ?? 0;
+    const effectiveTokenBudget = Math.max(0, tokenBudget - reservation);
     const seen = new Set<string>();
     const sources: RagContextCandidate[] = [];
     let used = 0;
@@ -29,13 +37,13 @@ export function buildRagContext(candidates: readonly RagContextCandidate[], toke
         seen.add(key);
         const sourceNumber = sources.length + 1;
         const header = `[${sourceNumber}] ${candidate.title || "Document"}${candidate.pageUrl ? ` (${candidate.pageUrl})` : ""}`;
-        const available = Math.max(tokenBudget - used - estimateTokens(header) - 2, 0);
+        const available = Math.max(effectiveTokenBudget - used - estimateTokens(header) - 2, 0);
         if (available <= 0) break;
         const maxChars = available * 4;
         const excerpt = body.length > maxChars ? `${body.slice(0, Math.max(0, maxChars - 3)).trim()}...` : body;
         const block = `${header}\n${excerpt}`;
         const blockTokens = estimateTokens(block) + 1;
-        if (used + blockTokens > tokenBudget && sources.length > 0) break;
+        if (used + blockTokens > effectiveTokenBudget && sources.length > 0) break;
         used += blockTokens;
         sources.push(candidate);
         blocks.push(block);
@@ -47,7 +55,7 @@ export function buildRagContext(candidates: readonly RagContextCandidate[], toke
 export function rewriteConversationalQuery(query: string, history: readonly { role?: string; content?: string }[]): string {
     const current = query.trim();
     if (!current || history.length === 0) return current;
-    const isFollowUp = current.split(/\s+/).length <= 12 && /\b(it|they|them|he|she|that|those|this|there|above|previous)\b/i.test(current);
+    const isFollowUp = AMBIGUOUS_SIGNALS_REGEX.test(current);
     if (!isFollowUp) return current;
     const priorUser = [...history].reverse().find((message) => message.role === "user" && message.content?.trim());
     return priorUser ? `${priorUser.content!.trim()}\nFollow-up: ${current}` : current;
