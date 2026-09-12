@@ -114,6 +114,7 @@ export interface AppConfig {
         chunkOverlapTokens: number;
         retrievalCandidateLimit: number;
         contextTokenBudget: number;
+        lexicalRetrievalEnabled: boolean;
     };
     observability: { logLevel: string; metricsToken?: string };
     integrations: { resendApiKey?: string; mem0ApiKey?: string; dailyTokenBudget: number | null };
@@ -247,6 +248,11 @@ export function parseEnvironment(environment: Environment, validatePolicies = tr
                 6000,
                 256,
                 100000,
+            ),
+            lexicalRetrievalEnabled: parseBoolean(
+                "RAG_LEXICAL_RETRIEVAL_ENABLED",
+                environment.RAG_LEXICAL_RETRIEVAL_ENABLED,
+                false,
             ),
         },
         observability: {
