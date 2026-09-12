@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import OpenAI from "openai";
+import { OpenAIEmbeddings } from "@langchain/openai";
 import dns from "node:dns/promises";
 import Bottleneck from "bottleneck";
 import robotsParser from "robots-parser";
@@ -13,22 +13,28 @@ interface CachedRobots {
 const robotsCache = new Map<string, CachedRobots>();
 const domainLimiters = new Map<string, Bottleneck>();
 
-let openai: OpenAI | undefined;
+const embeddingsClientCache = new Map<string, OpenAIEmbeddings>();
 
-function getOpenAIClient(): OpenAI {
+function getEmbeddingsClient(model: string, dimensions: number): OpenAIEmbeddings {
     const apiKey = config.llm.openAiApiKey || config.llm.openRouterEmbeddingApiKey;
     if (!apiKey) {
         throw new Error("OPENROUTER_EMBEDDING_API_KEY or OPENAI_API_KEY is required to generate vector embeddings.");
     }
 
-    if (!openai) {
-        openai = new OpenAI({
-            baseURL: config.llm.openAiBaseUrl || config.llm.openRouterBaseUrl,
-            apiKey: apiKey,
+    const baseURL = config.llm.openAiBaseUrl || config.llm.openRouterBaseUrl;
+    const cacheKey = `${model}:${dimensions}:${baseURL || ""}:${apiKey}`;
+    let client = embeddingsClientCache.get(cacheKey);
+    if (!client) {
+        client = new OpenAIEmbeddings({
+            model,
+            dimensions,
+            apiKey,
+            configuration: baseURL ? { baseURL } : undefined,
         });
+        embeddingsClientCache.set(cacheKey, client);
     }
 
-    return openai;
+    return client;
 }
 
 export interface CrawlConfig {
@@ -94,17 +100,11 @@ async function generateVectorEmbeddings(
         return createDummyVector(input);
     }
 
-    const response = await getOpenAIClient().embeddings.create({
-        model,
-        input: input,
-        encoding_format: "float",
-        dimensions,
-    });
-
+    const embeddingsClient = getEmbeddingsClient(model, dimensions);
     if (Array.isArray(input)) {
-        return response.data.map((d) => d.embedding);
+        return embeddingsClient.embedDocuments(input);
     }
-    return response.data[0].embedding;
+    return embeddingsClient.embedQuery(input);
 }
 
 // ---------------------------------------------------------------------------
