@@ -32,13 +32,15 @@ type RoomRagSettings = {
 
 The submit handler reads UIKit state, validates allowed enum values and prompt length, then writes this record. Settings are room-owned: only a room administrator/moderator (or app-authorized equivalent) may update them. The app loads the saved settings when opening the modal and attaches them to every room chat request. Absent settings use existing backend defaults.
 
-The backend validates the incoming override again. It treats model and prompt as generation configuration, and `topK`, threshold, and mode as retrieval configuration. Invalid values are rejected rather than silently broadened. `topK` is bounded at 15 and context construction remains constrained by its token budget.
+The backend validates the incoming override again **and does not trust it as authority**. The authenticated Rocket.Chat integration identity and signed/request-bound room and workspace identity remain authoritative; a request whose settings scope differs from the authenticated scope is rejected. It treats model and prompt as generation configuration, and `topK`, threshold, and mode as retrieval configuration. Invalid or tampered persisted values are rejected rather than silently broadened. `topK` is bounded at 15 and context construction remains constrained by its token budget.
 
 ## Retrieval architecture
 
-`scopedVectorSearch` receives validated retrieval options instead of imposing a three-result cap. It keeps dense retrieval for `semantic`, uses a scoped PostgreSQL lexical query over retained document/chunk text for `keyword`, and fuses independently retrieved result lists with RRF for `hybrid`. Every lexical result includes an actual excerpt and source provenance.
+`scopedVectorSearch` receives validated retrieval options instead of imposing a three-result cap. It over-fetches a bounded candidate pool (at least `max(20, topK * 2)` and at most 30), keeps dense retrieval for `semantic`, uses a scoped PostgreSQL lexical query over retained document/chunk text for `keyword`, and fuses independently retrieved result lists with RRF for `hybrid` (`k=60`, stable source/chunk-ID tie-breaker). Every lexical result includes an actual excerpt and source provenance.
 
-The implementation must not claim Qdrant payload filtering is BM25. Lexical search is separate and room/workspace scoped. If the existing schema lacks searchable chunk bodies, add the smallest migration/table/index necessary; do not query headings with an entire user sentence.
+`similarityThreshold` applies only to dense cosine candidates; it is not applied to lexical ranks or RRF scores. Keyword mode returns its bounded lexical ranking; hybrid filters the dense side first, fuses the two ranked lists, then emits the configured `topK`. This prevents incomparable score scales from being treated as one threshold.
+
+The implementation must not claim Qdrant payload filtering is BM25. Lexical search is separate and room/workspace scoped. If the existing schema lacks searchable chunk bodies, add the smallest migration/table/index necessary; do not query headings with an entire user sentence. The migration includes a versioned, idempotent backfill from active source content/segments, checkpointed retries and counts for failed records. Until a source is backfilled, hybrid returns the dense result for that source and records coverage telemetry; it must not silently broaden scope or fabricate lexical results.
 
 Deduplication uses stable chunk IDs where present, falling back to a normalized content hash. It must never infer identity from a 25-character prefix.
 
@@ -54,11 +56,13 @@ Web extraction selects `article` when present and otherwise `body`, removes stru
 
 Follow-up detection recognizes ambiguous English and Vietnamese references and is no longer constrained by a 12-word limit. It calls the existing structured rewrite only when history exists and ambiguity is detected; unavailable providers retain the original query with telemetry. The original user message remains the generation prompt.
 
-The configured system prompt is appended as a distinct bounded instruction. It cannot override grounding or citation rules embedded in server-side prompts.
+The configured system prompt is bounded, delimited as room-supplied untrusted instruction, and placed below immutable server-side system grounding/citation rules. Server prompts explicitly state that room instructions cannot override evidence-only, scope, citation, or safety requirements; the room value is never interpolated into those immutable rules.
 
 ## Quality and rollout
 
-Threshold defaults remain conservative until a labelled corpus demonstrates a better value. Add a corpus template containing query, expected source/chunk identifiers, language, scope and mode; use the existing fail-closed quality gate to compare Recall@10, MRR@10, citation validity, error rate and latency. No production metric is fabricated.
+Threshold defaults remain conservative until a labelled corpus demonstrates a better value. Add a corpus template containing query, expected source/chunk identifiers, language, scope and mode; use the existing fail-closed quality gate to compare Recall@10, MRR@10, citation validity, error rate and latency. Evaluation uses a distinct candidate depth of 10 (or the configured benchmark depth) regardless of a room's returned-context `topK`; the latter only controls what is presented to generation. No production metric is fabricated.
+
+Rollout is staged: dual-write and backfill first, then a limited labelled scope in semantic mode, then hybrid, and only then broader v1 reads. Promotion requires the project thresholds already documented for citation validity, Recall@10/MRR@10, retrieval error rate and p95 latency. Dashboards expose backfill coverage, per-mode no-result/error rate and latency. A failed gate, source-scope leak, citation mismatch, or error/latency breach immediately disables the new mode and returns to the existing flag-controlled path without deleting indexes.
 
 ## Error handling and security
 
@@ -70,4 +74,4 @@ Threshold defaults remain conservative until a labelled corpus demonstrates a be
 
 ## Verification
 
-Each behavior is developed test-first. Tests cover V1 word-budget chunking, crawler vector alignment, Vietnamese rewrite detection, lexical scope/excerpts/RRF, stable deduplication, sanitized extraction, modal state validation/persistence, request propagation and backend override validation. The full backend suite, typecheck, Rocket.Chat app tests/typecheck, and GitNexus change detection run before merge.
+Each behavior is developed test-first. Tests cover V1 word-budget chunking, crawler vector alignment, Vietnamese rewrite detection, lexical scope/excerpts/RRF, stable deduplication, sanitized extraction, modal state validation/persistence, request propagation and backend override validation. They also cover denied settings updates, complete request-path cross-room spoofing/isolation, missing-settings fallback, and tampered persistence records. The full backend suite, typecheck, Rocket.Chat app tests/typecheck, and GitNexus change detection run before merge.
