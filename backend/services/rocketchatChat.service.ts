@@ -13,7 +13,7 @@ import { config } from "../config/runtime.js";
 import { buildRagContext } from "../rag/context.js";
 import { rewriteQueryWithStructuredOutput } from "../rag/queryRewrite.js";
 import { startRagTrace } from "../rag/telemetry.js";
-import { trimHistoryForGeneration } from "../rag/history.js";
+import { baseMessagesToOpenAI, buildChatPromptMessages, trimHistoryForGeneration } from "../rag/history.js";
 import { type RoomRagSettings, ROOM_RAG_PROMPT_TOKEN_BUDGET } from "../rag/roomRagSettings.js";
 
 export interface RocketChatChatPayload {
@@ -173,20 +173,18 @@ export async function processRocketChatChat(payload: RocketChatChatPayload): Pro
             systemPrompt += `\n\nROOM INSTRUCTIONS:\n<<<\n${roomSettings.systemPrompt.trim()}\n>>>`;
         }
 
-        const messages: any[] = [{ role: "system", content: systemPrompt }];
-
         const boundedHistory = await trace.stage("CONTEXT", () => trimHistoryForGeneration(
             history,
             Math.max(256, Math.floor((config.rag?.contextTokenBudget ?? 5600) * 0.2)),
         ));
-        for (const message of boundedHistory) {
-            messages.push({
-                role: message.getType() === "human" ? "user" : "assistant",
-                content: message.content,
-            });
-        }
 
-        messages.push({ role: "user", content: query });
+        const promptMessages = buildChatPromptMessages({
+            systemPrompt,
+            history: boundedHistory,
+            query,
+        });
+
+        const messages = baseMessagesToOpenAI(promptMessages);
 
         // 3. Call LLM
         const openai = getLLMClient();

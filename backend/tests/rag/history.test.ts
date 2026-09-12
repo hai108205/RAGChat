@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { HumanMessage, AIMessage } from "@langchain/core/messages";
-import { countTokensApproximately, trimHistoryForGeneration } from "../../rag/history.js";
+import { HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
+import {
+    baseMessagesToOpenAI,
+    buildChatPromptMessages,
+    countTokensApproximately,
+    trimHistoryForGeneration,
+} from "../../rag/history.js";
 
 describe("RAG conversation history", () => {
     it("counts tokens approximately according to LangChain heuristic", () => {
@@ -34,6 +39,40 @@ describe("RAG conversation history", () => {
         expect(history.map((message) => message.content)).toEqual([
             "second question",
             "second answer",
+        ]);
+    });
+
+    it("assembles canonical LangChain chat prompt messages", () => {
+        const promptMessages = buildChatPromptMessages({
+            systemPrompt: "You are a helpful assistant.",
+            history: [
+                new HumanMessage("Previous q"),
+                new AIMessage("Previous a"),
+            ],
+            query: "Current q",
+        });
+
+        expect(promptMessages).toHaveLength(4);
+        expect(promptMessages[0]).toBeInstanceOf(SystemMessage);
+        expect(promptMessages[0].content).toBe("You are a helpful assistant.");
+        expect(promptMessages[1]).toBeInstanceOf(HumanMessage);
+        expect(promptMessages[2]).toBeInstanceOf(AIMessage);
+        expect(promptMessages[3]).toBeInstanceOf(HumanMessage);
+        expect(promptMessages[3].content).toBe("Current q");
+    });
+
+    it("converts BaseMessage arrays to OpenAI chat completions payload", () => {
+        const promptMessages = [
+            new SystemMessage("System instruction"),
+            new HumanMessage("User question"),
+            new AIMessage("AI response"),
+        ];
+
+        const openAiMessages = baseMessagesToOpenAI(promptMessages);
+        expect(openAiMessages).toEqual([
+            { role: "system", content: "System instruction" },
+            { role: "user", content: "User question" },
+            { role: "assistant", content: "AI response" },
         ]);
     });
 });

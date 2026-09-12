@@ -1,4 +1,4 @@
-import { trimHistoryForGeneration } from "../rag/history.js";
+import { baseMessagesToOpenAI, trimHistoryForGeneration } from "../rag/history.js";
 
 export interface ContextBudget {
     total: number;
@@ -222,10 +222,7 @@ interface BuildRecentMessagesInput {
 
 const buildRecentMessages = async ({ messages = [], budget }: BuildRecentMessagesInput): Promise<LLMMessage[]> => {
     const trimmed = await trimHistoryForGeneration(toMessagePairs(messages), budget);
-    return trimmed.map((message) => ({
-        role: message.getType() === "human" ? "user" : "assistant",
-        content: String(message.content),
-    }));
+    return baseMessagesToOpenAI(trimmed);
 };
 
 const fitMessagesToBudget = (messages: LLMMessage[], totalBudget: number): LLMMessage[] => {

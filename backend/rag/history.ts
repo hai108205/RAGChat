@@ -1,8 +1,13 @@
-import { AIMessage, HumanMessage, trimMessages, type BaseMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, SystemMessage, trimMessages, type BaseMessage } from "@langchain/core/messages";
 
 export interface ConversationHistoryMessage {
     role?: string;
     content?: string;
+}
+
+export interface ChatCompletionMessagePayload {
+    role: "system" | "user" | "assistant";
+    content: string;
 }
 
 function extractMessageContent(message: BaseMessage): string {
@@ -65,4 +70,43 @@ export async function trimHistoryForGeneration(
         strategy: "last",
         startOn: "human",
     });
+}
+
+/**
+ * Standard mapper converting a LangChain BaseMessage into an OpenAI Chat Completion message object.
+ */
+export function baseMessageToOpenAI(message: BaseMessage): ChatCompletionMessagePayload {
+    const type = message.getType();
+    const role: ChatCompletionMessagePayload["role"] =
+        type === "system" ? "system" : type === "human" ? "user" : "assistant";
+    const content = extractMessageContent(message);
+    return { role, content };
+}
+
+/**
+ * Standard mapper converting an array of LangChain BaseMessages into OpenAI Chat Completion payloads.
+ */
+export function baseMessagesToOpenAI(messages: readonly BaseMessage[]): ChatCompletionMessagePayload[] {
+    return messages.map(baseMessageToOpenAI);
+}
+
+export interface BuildChatPromptInput {
+    systemPrompt: string;
+    history?: readonly BaseMessage[];
+    query: string;
+}
+
+/**
+ * Assembles a unified LangChain BaseMessage[] representation of system prompt, conversation history, and user turn.
+ */
+export function buildChatPromptMessages({
+    systemPrompt,
+    history = [],
+    query,
+}: BuildChatPromptInput): BaseMessage[] {
+    return [
+        new SystemMessage(systemPrompt),
+        ...history,
+        new HumanMessage(query),
+    ];
 }
