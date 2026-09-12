@@ -95,6 +95,7 @@ model ChatSource {
     embeddingDimensions    Int?           @map("embedding_dimensions")
     dedupeKey              String?        @unique @map("dedupe_key")
     ragDocuments           RagDocument[]
+    lexicalChunks          RagLexicalChunk[]
 
     @@index([rocketchatWorkspaceId, rocketchatRoomId, createdAt])
     @@index([documentationUrl])
@@ -122,6 +123,7 @@ model RagDocument {
     activatedAt       DateTime?         @map("activated_at")
     chatSource        ChatSource        @relation(fields: [chatSourceId], references: [id], onDelete: Cascade)
     chunks            RagChunk[]
+    lexicalChunks     RagLexicalChunk[]
 
     @@unique([chatSourceId, versionHash, embeddingModel, embeddingDimensions])
     @@index([chatSourceId, status])
@@ -138,6 +140,30 @@ model RagChunk {
     document    RagDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
     @@unique([documentId, chunkIndex])
+    @@index([documentId])
+}
+
+model RagLexicalChunk {
+    id           String       @id @default(uuid())
+    chatSourceId String       @map("chat_source_id")
+    chunkId      String       @map("chunk_id")
+    chunkIndex   Int          @map("chunk_index")
+    content      String
+    contentHash  String       @map("content_hash")
+    locator      String
+    heading      String?
+    pageUrl      String?      @map("page_url")
+    documentId   String?      @map("document_id")
+    versionHash  String?      @map("version_hash")
+    metadata     Json?
+    createdAt    DateTime     @default(now()) @map("created_at")
+    updatedAt    DateTime     @updatedAt @map("updated_at")
+
+    chatSource   ChatSource   @relation(fields: [chatSourceId], references: [id], onDelete: Cascade)
+    document     RagDocument? @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+    @@unique([chatSourceId, chunkId])
+    @@index([chatSourceId])
     @@index([documentId])
 }
 
