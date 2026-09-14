@@ -81,3 +81,30 @@ export interface AggregateMetrics {
     };
     passed: boolean;
 }
+
+export interface EvaluatorReport {
+    schemaVersion: 1;
+    run: {
+        runId: string;
+        workspaceId: string;
+        roomId: string;
+        rocketUserId: string;
+        documentPath: string;
+        documentSha256: string;
+        evaluatorModel: string;
+        judgeModel: string;
+        provider: string;
+        baseUrl: string;
+        promptVersions: { generator: string; judge: string };
+        configuration: Record<string, unknown>;
+    };
+    ingestion: {
+        status: string;
+        sourceId?: string;
+        chunksCount?: number;
+        durationMs?: number;
+        error?: string;
+    };
+    cases: Array<GeneratedQuestion & CaseOutcome>;
+    aggregate: AggregateMetrics;
+}

@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
     aggregateMetrics,
     createRunScope,
-    type CaseOutcome,
 } from "../../scripts/ragE2E/metrics.js";
+import type { CaseOutcome } from "../../scripts/ragE2E/types.js";
 import {
     getNextPollDelay,
     isJobTerminal,
@@ -17,6 +17,8 @@ import {
     normalizeGeneratedQuestions,
     normalizeJudgeResponse,
 } from "../../scripts/ragE2E/llm.js";
+import { parseEvaluatorConfig } from "../../scripts/ragE2E/config.js";
+import { renderMarkdownReport } from "../../scripts/ragE2E/report.js";
 
 describe("Rocket.Chat RAG E2E evaluator metrics", () => {
     it("creates an isolated run scope with distinct workspace, room, and request namespace", () => {
@@ -174,7 +176,7 @@ describe("Rocket.Chat RAG E2E evaluator metrics", () => {
     });
 
     it("polls until a predicate succeeds without sleeping in the test", async () => {
-        const read = vi.fn()
+        const read = vi.fn<() => Promise<{ ready: boolean }>>()
             .mockResolvedValueOnce({ ready: false })
             .mockResolvedValueOnce({ ready: true });
         const sleep = vi.fn().mockResolvedValue(undefined);
@@ -217,5 +219,41 @@ describe("Rocket.Chat RAG E2E evaluator metrics", () => {
             refusal: 1,
             rationale: "bad score",
         }))).toThrow(/0.*2|score/i);
+    });
+
+    it("validates evaluator configuration while preserving safe defaults", () => {
+        expect(parseEvaluatorConfig({
+            RAG_E2E_DOCUMENT_PATH: "package.json",
+            RAG_E2E_TOKEN: "token",
+            RAG_E2E_ROCKET_USER_ID: "user",
+        })).toMatchObject({
+            baseUrl: "http://localhost:8000",
+            cases: 50,
+            provider: "DEFAULT",
+            workerAttempts: 3,
+            rocketUserId: "user",
+        });
+        expect(() => parseEvaluatorConfig({ RAG_E2E_BASE_URL: "not-a-url", RAG_E2E_DOCUMENT_PATH: "x", RAG_E2E_TOKEN: "t", RAG_E2E_ROCKET_USER_ID: "u" }))
+            .toThrow(/base URL/i);
+        expect(() => parseEvaluatorConfig({ RAG_E2E_DOCUMENT_PATH: "package.json", RAG_E2E_ROCKET_USER_ID: "u" }))
+            .toThrow(/token/i);
+        expect(() => parseEvaluatorConfig({ RAG_E2E_DOCUMENT_PATH: "package.json", RAG_E2E_TOKEN: "t", RAG_E2E_ROCKET_USER_ID: "" }))
+            .toThrow(/rocket.*user/i);
+        expect(() => parseEvaluatorConfig({ RAG_E2E_DOCUMENT_PATH: "package.json", RAG_E2E_TOKEN: "t", RAG_E2E_ROCKET_USER_ID: "u", RAG_E2E_CASES: "0" }))
+            .toThrow(/cases/i);
+    });
+
+    it("renders a redacted Markdown report with synthetic-label warning", () => {
+        const markdown = renderMarkdownReport({
+            schemaVersion: 1,
+            run: { runId: "run-1", workspaceId: "ws", roomId: "room", rocketUserId: "user", documentPath: "DOC_RAG.txt", documentSha256: "hash", evaluatorModel: "model", judgeModel: "judge", promptVersions: { generator: "v1", judge: "v1" }, configuration: { token: "secret-token" } },
+            ingestion: { status: "COMPLETED", sourceId: "source-1", chunksCount: 4, durationMs: 20 },
+            cases: [],
+            aggregate: { generatedCount: 0, completedCount: 0, failedCount: 0, judgeErrorCount: 0, scoreEligibleCount: 0, emptyCitationCount: 0, errorRate: 0, emptyCitationRate: 0, averageScores: { correctness: null, groundedness: null, citationSupport: null, refusal: null }, latencyMs: { p50: null, p95: null }, thresholds: { correctness: false, groundedness: false, citationSupport: false, refusal: false, errorRate: true }, passed: false },
+        } as any);
+
+        expect(markdown).toContain("synthetic");
+        expect(markdown).toContain("run-1");
+        expect(markdown).not.toContain("secret-token");
     });
 });

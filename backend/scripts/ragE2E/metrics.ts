@@ -6,13 +6,13 @@ import type {
     RunScope,
 } from "./types.js";
 
-export function createRunScope(idFactory: () => string = crypto.randomUUID): RunScope {
+export function createRunScope(idFactory: () => string = crypto.randomUUID, rocketUserId = "rag-e2e-user"): RunScope {
     const runId = idFactory();
     return {
         runId,
         workspaceId: `rag-e2e-${runId}`,
         roomId: `rag-e2e-room-${runId}`,
-        rocketUserId: "rag-e2e-user",
+        rocketUserId,
     };
 }
 
@@ -70,4 +70,3 @@ export function aggregateMetrics(outcomes: readonly CaseOutcome[], thresholds: E
         passed: !thresholds.enforce || (scoreEligibleCount > 0 && Object.values(thresholdResults).every(Boolean)),
     };
 }
-
