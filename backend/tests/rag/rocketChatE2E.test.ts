@@ -13,6 +13,10 @@ import {
     pollUntil,
     requestJson,
 } from "../../scripts/ragE2E/http.js";
+import {
+    normalizeGeneratedQuestions,
+    normalizeJudgeResponse,
+} from "../../scripts/ragE2E/llm.js";
 
 describe("Rocket.Chat RAG E2E evaluator metrics", () => {
     it("creates an isolated run scope with distinct workspace, room, and request namespace", () => {
@@ -182,5 +186,36 @@ describe("Rocket.Chat RAG E2E evaluator metrics", () => {
             sleep,
         })).resolves.toMatchObject({ value: { ready: true }, attempts: 2 });
         expect(sleep).toHaveBeenCalledWith(10);
+    });
+
+    it("normalizes a fenced generated question set and rejects duplicate or incomplete cases", () => {
+        const raw = "```json\n{" +
+            "\"questions\":[{" +
+            "\"caseId\":\"q1\",\"question\":\"Khi nào diễn ra?\",\"referenceAnswer\":\"27/08/2026\",\"evidence\":\"27/08/2026\",\"category\":\"date\",\"answerable\":true" +
+            "}]}\n```";
+
+        expect(normalizeGeneratedQuestions(raw, 1)).toEqual([expect.objectContaining({
+            caseId: "q1",
+            category: "date",
+            answerable: true,
+        })]);
+        expect(() => normalizeGeneratedQuestions(JSON.stringify({
+            questions: [
+                { caseId: "q1", question: "same", referenceAnswer: "a", evidence: "a", category: "fact", answerable: true },
+                { caseId: "q1", question: "same", referenceAnswer: "a", evidence: "a", category: "fact", answerable: true },
+            ],
+        }), 2)).toThrow(/distinct|duplicate/i);
+    });
+
+    it("extracts a judge object from surrounding prose and validates its 0-to-2 rubric", () => {
+        expect(normalizeJudgeResponse("Here is the result: {\"correctness\":2,\"groundedness\":1,\"citationSupport\":2,\"refusal\":0,\"rationale\":\"supported\"}"))
+            .toEqual({ correctness: 2, groundedness: 1, citationSupport: 2, refusal: 0, rationale: "supported" });
+        expect(() => normalizeJudgeResponse(JSON.stringify({
+            correctness: 3,
+            groundedness: 1,
+            citationSupport: 1,
+            refusal: 1,
+            rationale: "bad score",
+        }))).toThrow(/0.*2|score/i);
     });
 });
