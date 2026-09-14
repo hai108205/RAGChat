@@ -59,7 +59,7 @@
 
 - [ ] **Step 3: Implement native-fetch integration helpers**
 
-  Add authenticated JSON POST/GET helpers using `Authorization: Bearer <integration token>`, send the same unique ID in `X-Request-Id` and the required body `requestId`, verify the response header, parse `{ success, data, message }`, and keep response bodies bounded in thrown errors. Add pure polling predicates and a small injectable sleep function so unit tests never wait. Treat `FAILED` as terminal only after the persisted job `attempts` reaches the configured BullMQ attempt count, because the current worker can write `FAILED` between retries.
+  Add authenticated JSON POST/GET helpers using `Authorization: Bearer <integration token>`, send the same unique ID in `X-Request-Id` and the required body `requestId`, verify the response header, parse `{ success, data, message }`, and keep response bodies bounded in thrown errors. Add pure polling predicates and a small injectable sleep function so unit tests never wait. Treat `FAILED` as terminal only after the persisted job `attempts` reaches the configured BullMQ attempt count, because the current worker can write `FAILED` between retries; when the queue's `opts.attempts` is observable, use it as the source of truth and warn if the env fallback differs.
 
 - [ ] **Step 4: Run focused tests and verify all helper tests pass**
 
@@ -121,9 +121,9 @@
 
 - [ ] **Step 3: Implement the live runner**
 
-  Read the document as UTF-8 from the repository-root default path, validate the configured backend URL/token, create a unique `workspaceId` and `roomId`, and upload the file as base64 to `/sources/base64`. Poll `/sources` until the source is active and indexed. Generate the configured number of questions, submit each via `/messages/async` with the same unique ID in the body and `X-Request-Id`, verify the response header, poll Prisma read-only for the matching integration job and persisted chat message/source rows, wait through intermediate BullMQ failures until attempts are exhausted, judge each completed case, aggregate metrics, and write JSON/Markdown under `artifacts/rag-e2e/`. Keep test data by default; only delete the run’s source when `RAG_E2E_CLEANUP=true`.
+  Read the document as UTF-8 from the repository-root default path, validate the configured backend URL/token/`rocketUserId`, create a unique `workspaceId` and `roomId`, and upload the file as base64 with `contentType: "text/plain"` to `/sources/base64`. Poll `/sources` until the source is active and indexed. Generate the configured number of questions, submit each via `/messages/async` with `rocketUserId`, `provider`, `model`, and the same unique ID in the body and `X-Request-Id`, verify the response header, poll Prisma read-only for the matching integration job and persisted chat message/source rows, wait through intermediate BullMQ failures until attempts are exhausted, judge each completed case, aggregate metrics, and write exact files `rag-e2e-${runId}.json` and `rag-e2e-${runId}.md` under `artifacts/rag-e2e/`. Keep test data by default; only delete the run’s source when `RAG_E2E_CLEANUP=true`, and attempt that cleanup in `finally`.
 
-  Use `RAG_E2E_CASES=50` by default, allow a smaller smoke run, serialize requests by default, and expose bounded timeout/poll settings. Do not use web routes or JWT routes. Exit non-zero on required live failures or configured score thresholds.
+  Use `RAG_E2E_CASES=50` by default, allow a smaller smoke run, serialize requests by default, and expose bounded timeout/poll settings including parsed `RAG_E2E_WORKER_ATTEMPTS=3`; define `RAG_E2E_ROCKET_USER_ID` with default `rag-e2e-user`. Retry question generation three times, network requests three times, and malformed judge JSON once with a repair prompt; exclude `judgeError` cases from score averages and report their count. Do not use web routes or JWT routes. Disconnect Prisma in a `finally` block. Exit non-zero on required live failures or configured score thresholds.
 
 - [ ] **Step 4: Add the package script**
 
@@ -168,7 +168,13 @@
 
   Expected: only the planned evaluator files are attributed to this implementation; pre-existing worktree changes must be called out separately.
 
-- [ ] **Step 5: Run final verification**
+- [ ] **Step 5: Run GitNexus change detection before each implementation commit**
+
+  Run: `node .gitnexus/run.cjs detect-changes --scope all --repo D:\\Work\\Study\\RAGChat\\.worktrees\\rocketchat-rag-e2e-quality --limit 100`
+
+  Expected: only the planned evaluator files and report-ignore rule are attributed to this implementation; pre-existing changes in the main worktree must be called out separately. Run this immediately before every implementation commit.
+
+- [ ] **Step 6: Run final verification**
 
   Run: `pnpm --dir backend run typecheck`
 
