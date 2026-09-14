@@ -4,9 +4,16 @@ export interface ApiEnvelope<T> {
     message?: string;
 }
 
+function safeErrorText(value: unknown, token?: string): string {
+    let text = String(value ?? "request failed");
+    if (token) text = text.split(token).join("[REDACTED]");
+    text = text.replace(/Bearer\s+[^\s,}]+/gi, "Bearer [REDACTED]");
+    return text.slice(0, 2000);
+}
+
 export function parseApiEnvelope<T>(status: number, body: ApiEnvelope<T>, requestId?: string): { data: T; message: string } {
     if (status >= 400 || body.success === false || body.data === undefined) {
-        const message = typeof body.message === "string" && body.message.trim() ? body.message.trim() : `HTTP ${status}`;
+        const message = typeof body.message === "string" && body.message.trim() ? safeErrorText(body.message.trim()) : `HTTP ${status}`;
         throw new Error(`${message}${requestId ? ` (request ${requestId})` : ""}`);
     }
     return { data: body.data, message: body.message || "" };
@@ -75,11 +82,11 @@ export async function requestJson<T>({
             } catch {
                 throw new Error(`Backend returned invalid JSON (HTTP ${response.status})`);
             }
-            if (requestId && responseRequestId && responseRequestId !== requestId) {
-                throw new Error(`Backend request ID mismatch: expected ${requestId}, received ${responseRequestId}`);
+            if (requestId && responseRequestId !== requestId) {
+                throw new Error(`Backend request ID mismatch: expected ${requestId}, received ${responseRequestId || "missing"}`);
             }
             if (response.status >= 500 || response.status === 429) {
-                throw new Error(`Backend HTTP ${response.status}: ${parsed.message || "request failed"}`);
+                throw new Error(`Backend HTTP ${response.status}: ${safeErrorText(parsed.message, token)}`);
             }
             const envelope = parseApiEnvelope(response.status, parsed, requestId);
             return { ...envelope, requestId: responseRequestId || requestId };

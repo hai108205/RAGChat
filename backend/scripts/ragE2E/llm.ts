@@ -93,7 +93,7 @@ async function withRetries<T>(operation: () => Promise<T>, attempts: number): Pr
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-export function createEvaluatorLlmClient(baseUrlOverride?: string): { client: OpenAI; model: string; provider: string; baseUrl: string } {
+export function createEvaluatorLlmClient(baseUrlOverride?: string, timeoutMs = 120000): { client: OpenAI; model: string; provider: string; baseUrl: string } {
     const openRouterKey = config.llm.openRouterLlmApiKey;
     const openAiKey = config.llm.openAiApiKey;
     const useOpenRouter = Boolean(openRouterKey);
@@ -101,8 +101,8 @@ export function createEvaluatorLlmClient(baseUrlOverride?: string): { client: Op
     if (!apiKey) throw new Error("Question generation/judging requires OPENROUTER_LLM_API_KEY or OPENAI_API_KEY");
     const baseUrl = baseUrlOverride || (useOpenRouter ? config.llm.openRouterBaseUrl : config.llm.openAiBaseUrl || "https://api.openai.com/v1");
     return {
-        client: new OpenAI({ apiKey, baseURL: baseUrl }),
-        model: process.env.RAG_E2E_JUDGE_MODEL || process.env.RAG_E2E_MODEL || config.llm.defaultModel,
+        client: new OpenAI({ apiKey, baseURL: baseUrl, timeout: timeoutMs }),
+        model: process.env.RAG_E2E_MODEL || config.llm.defaultModel,
         provider: useOpenRouter ? "OPENROUTER" : "OPENAI",
         baseUrl,
     };
@@ -114,15 +114,17 @@ export async function generateQuestions(
     document: string,
     count: number,
 ): Promise<GeneratedQuestion[]> {
-    const response = await withRetries(() => client.chat.completions.create({
+    return withRetries(async () => {
+        const response = await client.chat.completions.create({
         model,
         temperature: 0,
         messages: [
             { role: "system", content: "Bạn là chuyên gia tạo bộ kiểm thử RAG. Chỉ trả về JSON hợp lệ, không Markdown." },
             { role: "user", content: `Tạo đúng ${count} câu hỏi tiếng Việt từ tài liệu dưới đây. Phân bổ các category fact, date, responsibility, multi_hop, negative; mỗi category phải xuất hiện. Câu negative phải không có đáp án trong tài liệu. Trả về {\"questions\":[{\"caseId\":\"q-1\",\"question\":\"...\",\"referenceAnswer\":\"...\",\"evidence\":\"...\",\"category\":\"fact|date|responsibility|multi_hop|negative\",\"answerable\":true}]} và không lặp câu hỏi.\n\nTÀI LIỆU:\n${document}` },
         ],
-    }), 3);
-    return normalizeGeneratedQuestions(responseText(response), count);
+        });
+        return normalizeGeneratedQuestions(responseText(response), count);
+    }, 3);
 }
 
 export async function judgeAnswer(client: OpenAI, model: string, input: JudgeInput): Promise<JudgeScore> {

@@ -19,6 +19,7 @@ export interface EvaluatorConfig extends EvaluationThresholds {
     pollInitialMs: number;
     pollMaxMs: number;
     requestTimeoutMs: number;
+    llmTimeoutMs: number;
     concurrency: number;
     workerAttempts: number;
     outputDir: string;
@@ -62,6 +63,8 @@ export function parseEvaluatorConfig(input: Record<string, string | undefined> =
     if (!fs.existsSync(documentPath) || !fs.statSync(documentPath).isFile()) throw new Error(`RAG_E2E_DOCUMENT_PATH is not readable: ${documentPath}`);
     const token = text(input, "RAG_E2E_TOKEN", input.ROCKETCHAT_INTEGRATION_TOKEN);
     const rocketUserId = text(input, "RAG_E2E_ROCKET_USER_ID", "rag-e2e-user");
+    const workerAttempts = integer(input, "RAG_E2E_WORKER_ATTEMPTS", 3, 1, 10);
+    if (workerAttempts !== 3) throw new Error("RAG_E2E_WORKER_ATTEMPTS must remain 3 because BullMQ owns the integration queue retry policy");
     return {
         baseUrl: baseUrl.replace(/\/$/, ""),
         token,
@@ -76,8 +79,9 @@ export function parseEvaluatorConfig(input: Record<string, string | undefined> =
         pollInitialMs: integer(input, "RAG_E2E_POLL_INITIAL_MS", 500, 10, 60000),
         pollMaxMs: integer(input, "RAG_E2E_POLL_MAX_MS", 5000, 10, 120000),
         requestTimeoutMs: integer(input, "RAG_E2E_REQUEST_TIMEOUT_MS", 30000, 1000, 300000),
+        llmTimeoutMs: integer(input, "RAG_E2E_LLM_TIMEOUT_MS", 120000, 1000, 600000),
         concurrency: integer(input, "RAG_E2E_CONCURRENCY", 1, 1, 10),
-        workerAttempts: integer(input, "RAG_E2E_WORKER_ATTEMPTS", 3, 1, 10),
+        workerAttempts,
         outputDir: path.resolve(text(input, "RAG_E2E_OUTPUT_DIR", path.join(repoRoot, "artifacts", "rag-e2e"))),
         cleanup: booleanValue(input, "RAG_E2E_CLEANUP", false),
         enforce: booleanValue(input, "RAG_E2E_ENFORCE_THRESHOLDS", false),

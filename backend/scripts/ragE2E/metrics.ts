@@ -45,7 +45,7 @@ export function aggregateMetrics(outcomes: readonly CaseOutcome[], thresholds: E
     };
     const latencies = completed.flatMap((outcome) => typeof outcome.latencyMs === "number" ? [outcome.latencyMs] : []);
     const errorRate = generatedCount ? failedCount / generatedCount : 0;
-    const emptyCitationRate = generatedCount ? emptyCitationCount / generatedCount : 0;
+    const emptyCitationRate = completed.length ? emptyCitationCount / completed.length : 0;
     const scorePass = (value: number | null, minimum: number) => value !== null && value >= minimum;
     const thresholdResults = {
         correctness: scorePass(averageScores.correctness, thresholds.minCorrectness),
@@ -67,6 +67,6 @@ export function aggregateMetrics(outcomes: readonly CaseOutcome[], thresholds: E
         averageScores,
         latencyMs: { p50: percentile(latencies, 0.5), p95: percentile(latencies, 0.95) },
         thresholds: thresholdResults,
-        passed: !thresholds.enforce || (scoreEligibleCount > 0 && Object.values(thresholdResults).every(Boolean)),
+        passed: failedCount === 0 && (!thresholds.enforce || (scoreEligibleCount > 0 && Object.values(thresholdResults).every(Boolean))),
     };
 }

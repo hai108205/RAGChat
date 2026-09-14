@@ -1,10 +1,15 @@
 import type { EvaluatorReport } from "./types.js";
 
-function redact(value: unknown): unknown {
-    if (Array.isArray(value)) return value.map(redact);
+export function redactSensitive(value: unknown, secrets: readonly string[] = []): unknown {
+    if (Array.isArray(value)) return value.map((item) => redactSensitive(item, secrets));
+    if (typeof value === "string") {
+        let text = value;
+        for (const secret of secrets) if (secret) text = text.split(secret).join("[REDACTED]");
+        return text.replace(/Bearer\s+[^\s,}]+/gi, "Bearer [REDACTED]");
+    }
     if (!value || typeof value !== "object") return value;
     return Object.fromEntries(Object.entries(value).map(([key, item]) =>
-        /token|authorization|api.?key/i.test(key) ? [key, "[REDACTED]"] : [key, redact(item)],
+        /token|authorization|api.?key/i.test(key) ? [key, "[REDACTED]"] : [key, redactSensitive(item, secrets)],
     ));
 }
 
@@ -40,6 +45,6 @@ export function renderMarkdownReport(report: EvaluatorReport): string {
         if (item.judge) lines.push(`**Scores:** correctness ${item.judge.correctness}/2, groundedness ${item.judge.groundedness}/2, citations ${item.judge.citationSupport}/2, refusal ${item.judge.refusal}/2`, `**Rationale:** ${item.judge.rationale}`);
         lines.push("");
     }
-    lines.push("## Sanitized configuration", "", "```json", JSON.stringify(redact(report.run.configuration), null, 2), "```");
+    lines.push("## Sanitized configuration", "", "```json", JSON.stringify(redactSensitive(report.run.configuration), null, 2), "```");
     return lines.join("\n");
 }

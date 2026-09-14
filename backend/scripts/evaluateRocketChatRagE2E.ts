@@ -16,7 +16,7 @@ import {
     judgeAnswer,
 } from "./ragE2E/llm.js";
 import { aggregateMetrics, createRunScope } from "./ragE2E/metrics.js";
-import { renderMarkdownReport } from "./ragE2E/report.js";
+import { redactSensitive, renderMarkdownReport } from "./ragE2E/report.js";
 import type { CaseOutcome, EvaluatorReport, GeneratedQuestion, PersistedCitation } from "./ragE2E/types.js";
 
 const PROMPT_VERSIONS = { generator: "rocket-chat-e2e-generator-v1", judge: "rocket-chat-e2e-judge-v1" };
@@ -157,6 +157,19 @@ function sanitizedConfig(config: EvaluatorConfig): Record<string, unknown> {
     return safe;
 }
 
+async function mapWithConcurrency<T, R>(items: readonly T[], concurrency: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+    const results = new Array<R>(items.length);
+    let nextIndex = 0;
+    async function worker(): Promise<void> {
+        while (nextIndex < items.length) {
+            const index = nextIndex++;
+            results[index] = await mapper(items[index]);
+        }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+    return results;
+}
+
 async function run(): Promise<void> {
     const config = parseEvaluatorConfig();
     const scope = createRunScope(crypto.randomUUID, config.rocketUserId);
@@ -166,8 +179,15 @@ async function run(): Promise<void> {
     const startedAt = Date.now();
     let sourceId: string | undefined;
     let report: EvaluatorReport | undefined;
+    let fatalError: string | undefined;
+    let ingestion: EvaluatorReport["ingestion"] = { status: "NOT_STARTED" };
+    let questions: GeneratedQuestion[] = [];
+    let outcomes: CaseOutcome[] = [];
+    let evaluatorModel = config.model || "not-started";
+    let evaluatorProvider = config.provider;
     try {
         const ingestionRequestId = `${scope.runId}-ingestion`;
+        const ingestionStartedAt = Date.now();
         await requestJson({
             baseUrl: config.baseUrl,
             token: config.token,
@@ -186,14 +206,19 @@ async function run(): Promise<void> {
             },
             timeoutMs: config.requestTimeoutMs,
         });
-        const ingestionStartedAt = Date.now();
+        const ingestionJob = await waitForJob(config, scope.workspaceId, ingestionRequestId, "ingestion");
+        if (ingestionJob.status !== "COMPLETED") {
+            ingestion = { status: "FAILED", error: ingestionJob.error || `Worker status: ${ingestionJob.status}` };
+            throw new Error(ingestion.error);
+        }
         const source = await pollSource(config, scope, filename);
         sourceId = source.id;
-        const ingestion = { status: "COMPLETED", sourceId, chunksCount: Number(source.chunksCount), durationMs: elapsed(ingestionStartedAt) };
-        const llm = createEvaluatorLlmClient();
-        const questions = await generateQuestions(llm.client, llm.model, document, config.cases);
-        const outcomes: CaseOutcome[] = [];
-        for (const question of questions) outcomes.push(await evaluateCase(config, scope, question, llm));
+        ingestion = { status: "COMPLETED", sourceId, chunksCount: Number(source.chunksCount), durationMs: elapsed(ingestionStartedAt) };
+        const llm = createEvaluatorLlmClient(undefined, config.llmTimeoutMs);
+        evaluatorModel = llm.model;
+        evaluatorProvider = llm.provider;
+        questions = await generateQuestions(llm.client, llm.model, document, config.cases);
+        outcomes = await mapWithConcurrency(questions, config.concurrency, (question) => evaluateCase(config, scope, question, llm));
         const aggregate = aggregateMetrics(outcomes, config);
         report = {
             schemaVersion: 1,
@@ -206,21 +231,49 @@ async function run(): Promise<void> {
                 documentSha256,
                 evaluatorModel: llm.model,
                 judgeModel: config.judgeModel || llm.model,
-                provider: llm.provider,
+                provider: evaluatorProvider,
                 baseUrl: config.baseUrl,
                 promptVersions: PROMPT_VERSIONS,
                 configuration: sanitizedConfig(config),
             },
             ingestion,
-            cases: questions.map((question) => ({ ...question, ...(outcomes.find((item) => item.caseId === question.caseId) as CaseOutcome) })),
+            cases: questions.map((question) => ({ ...question, ...(outcomes.find((item) => item.caseId === question.caseId) || { caseId: question.caseId, requestId: "not-submitted", status: "failed" as const, error: "Case was not evaluated" }) })),
             aggregate,
+        };
+    } catch (error) {
+        fatalError = error instanceof Error ? error.message : String(error);
+        console.error(`RAG E2E fatal error: ${fatalError}`);
+        report = {
+            schemaVersion: 1,
+            run: {
+                runId: scope.runId,
+                workspaceId: scope.workspaceId,
+                roomId: scope.roomId,
+                rocketUserId: scope.rocketUserId,
+                documentPath: config.documentPath,
+                documentSha256,
+                evaluatorModel,
+                judgeModel: config.judgeModel || evaluatorModel,
+                provider: evaluatorProvider,
+                baseUrl: config.baseUrl,
+                promptVersions: PROMPT_VERSIONS,
+                configuration: sanitizedConfig(config),
+            },
+            ingestion,
+            cases: questions.map((question) => ({ ...question, ...(outcomes.find((item) => item.caseId === question.caseId) || { caseId: question.caseId, requestId: "not-submitted", status: "failed" as const, error: "Case was not evaluated" }) })),
+            aggregate: { ...aggregateMetrics(outcomes, config), passed: false },
         };
     } finally {
         if (config.cleanup && sourceId) {
             await requestJson({
                 baseUrl: config.baseUrl,
                 token: config.token,
-                path: queryPath(`/api/v1/integrations/rocketchat/sources/${sourceId}`, { workspaceId: scope.workspaceId, roomId: scope.roomId, mode: "room" }),
+                path: queryPath(`/api/v1/integrations/rocketchat/sources/${sourceId}`, {
+                    workspaceId: scope.workspaceId,
+                    roomId: scope.roomId,
+                    mode: "room",
+                    actorRocketUserId: scope.rocketUserId,
+                }),
                 method: "DELETE",
                 requestId: `${scope.runId}-cleanup`,
                 timeoutMs: config.requestTimeoutMs,
@@ -232,14 +285,18 @@ async function run(): Promise<void> {
     await mkdir(config.outputDir, { recursive: true });
     const jsonPath = path.join(config.outputDir, `rag-e2e-${scope.runId}.json`);
     const markdownPath = path.join(config.outputDir, `rag-e2e-${scope.runId}.md`);
-    await writeFile(jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-    await writeFile(markdownPath, `${renderMarkdownReport(report)}\n`, "utf8");
+    const safeReport = redactSensitive(report, [
+        config.token,
+        process.env.OPENAI_API_KEY || "",
+        process.env.OPENROUTER_LLM_API_KEY || "",
+    ]) as EvaluatorReport;
+    await writeFile(jsonPath, `${JSON.stringify(safeReport, null, 2)}\n`, "utf8");
+    await writeFile(markdownPath, `${renderMarkdownReport(safeReport)}\n`, "utf8");
     console.log(JSON.stringify({ runId: scope.runId, jsonPath, markdownPath, durationMs: elapsed(startedAt), aggregate: report.aggregate }));
-    if (!report.aggregate.passed) process.exitCode = 1;
+    if (fatalError || !report.aggregate.passed) process.exitCode = 1;
 }
 
 run().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
 });
-

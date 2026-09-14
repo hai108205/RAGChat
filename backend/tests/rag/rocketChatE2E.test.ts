@@ -92,7 +92,7 @@ describe("Rocket.Chat RAG E2E evaluator metrics", () => {
                 refusal: 0.5,
             },
             latencyMs: { p50: 200, p95: 300 },
-            passed: true,
+            passed: false,
         });
     });
 
